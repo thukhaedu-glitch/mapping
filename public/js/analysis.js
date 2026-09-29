@@ -125,3 +125,47 @@ export function matchBrand(placeName, brands) {
   }
   return best;
 }
+
+/* ------------------------------------------------ WorldPop API (automatic population)
+ * Total residents inside a circle, from WorldPop's 100 m gridded estimates (2020, latest in the API).
+ * https://www.worldpop.org/sdi/advancedapi/  — free, no key. Results are cached on the store doc.
+ */
+export const WORLDPOP_YEAR = 2020;
+
+export function circleGeoJSON(c, radiusM, steps = 48) {
+  const coords = [];
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * 2 * Math.PI;
+    const dLat = (radiusM * Math.cos(a)) / 111320, dLng = (radiusM * Math.sin(a)) / (111320 * Math.cos(rad(c.lat)));
+    coords.push([+(c.lng + dLng).toFixed(5), +(c.lat + dLat).toFixed(5)]);
+  }
+  return { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [coords] } }] };
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/** Direct browser call. Throws TypeError if the browser blocks it (CORS) — caller falls back to the Cloud Function. */
+export async function worldpopDirect(center, radiusM) {
+  const u = new URL("https://api.worldpop.org/v1/services/stats");
+  u.search = new URLSearchParams({ dataset: "wpgppop", year: String(WORLDPOP_YEAR), geojson: JSON.stringify(circleGeoJSON(center, radiusM)), runasync: "false" });
+  let j = await (await fetch(u)).json();
+  for (let i = 0; j.status !== "finished" && j.taskid && i < 20; i++) {       // async fallback: poll the task
+    await sleep(1500);
+    j = await (await fetch(`https://api.worldpop.org/v1/tasks/${j.taskid}`)).json();
+  }
+  if (j.error || j.data?.total_population == null) throw new Error(j.error_message || "WorldPop returned no data for this area.");
+  return j.data.total_population;
+}
+
+/* ------------------------------------------------ Road distance (OSRM, OpenStreetMap roads)
+ * Public demo server: fine for occasional clicks, not for bulk. Times are free-flow (no traffic).
+ */
+export async function roadRoute(a, b) {
+  const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${a.lng},${a.lat};${b.lng},${b.lat}?overview=full&geometries=geojson`);
+  if (!r.ok) throw new Error("Routing service unavailable");
+  const j = await r.json();
+  const rt = j.routes?.[0];
+  if (!rt) throw new Error("No road route found");
+  return { meters: rt.distance, seconds: rt.duration, path: rt.geometry.coordinates.map(([lng, lat]) => [lat, lng]) };
+}
+export const fmtDur = s => (s < 3600 ? `${Math.max(1, Math.round(s / 60))} min` : `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`);

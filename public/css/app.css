@@ -144,3 +144,12 @@ img.mark { border-radius: 50%; object-fit: contain; background: #fff; border: 2p
 .logo-slot input[type=color] { width: 48px; height: 22px; }
 .map-export .toggle { box-shadow: var(--shadow); cursor: pointer; }
 .map-export .toggle input { margin: 0; }
+
+/* measure */
+.map-export > .row > .btn { box-shadow: var(--shadow); }
+#measure-btn.active { background: #111; color: #fff; border-color: #111; }
+.measure-tip { background: #111; color: #fff; border: 0; border-radius: 8px; padding: 6px 10px; font-size: 12.5px; box-shadow: var(--shadow); white-space: nowrap; }
+.measure-tip::before { border-top-color: #111 !important; }
+.measure-tip .mt-names { font-size: 11px; opacity: .75; margin-top: 2px; }
+.measure-tip .mt-x { background: none; border: 0; color: #fff; opacity: .6; cursor: pointer; margin-left: 6px; font-size: 11px; }
+.nb .d .link { margin-left: 4px; }

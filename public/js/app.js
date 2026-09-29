@@ -1,5 +1,5 @@
 import { createBackend, hasFirebase } from "./data.js";
-import { distance, fmtDist, fmtNum, neighbours, radiusSummary, loadPopGrid, popGridInfo, populationWithin, poiCounts, POI_GROUPS, matchBrand } from "./analysis.js";
+import { distance, fmtDist, fmtNum, neighbours, radiusSummary, loadPopGrid, popGridInfo, populationWithin, poiCounts, POI_GROUPS, matchBrand, worldpopDirect, WORLDPOP_YEAR, roadRoute, fmtDur } from "./analysis.js";
 import { TILES } from "./tiles.js";
 import { renderMapCanvas, renderTableCanvas, exportJPG, exportPDF } from "./export.js";
 import { parseFile, exportStores, exportAnalysis, downloadTemplate, coordsFromLink } from "./excel.js";
@@ -11,6 +11,7 @@ const toast = (msg, ms = 2600) => { const t = $("#toast"); t.textContent = msg; 
 const S = {
   api: null, brands: [], stores: [], brandsById: {}, hidden: new Set(),
   selectedId: null, radius: 1000, placing: false, editingId: null, map: null, markers: {}, circle: null, findResults: [],
+  measure: { on: false, pts: [], items: [], layer: null, temp: null }, popBusy: new Set(), popFailed: new Set(),
 };
 // Brand mark: logo if uploaded, else a colour dot. size in px.
 const mark = (b, size = 10, extra = "") => b?.logo
@@ -116,7 +117,9 @@ function applyRole() {
 function initMap() {
   S.map = L.map("map", { zoomControl: true }).setView(MYANMAR_CENTER, 12);
   L.tileLayer(TILES.url, { maxZoom: TILES.maxZoom, subdomains: TILES.subdomains || "abc", attribution: TILES.html, crossOrigin: true }).addTo(S.map);
+  S.measure.layer = L.layerGroup().addTo(S.map);
   S.map.on("click", e => {
+    if (S.measure.on) return measureClick({ lat: e.latlng.lat, lng: e.latlng.lng });
     if (!S.placing) return;
     stopPlacing();
     openStoreDialog(null, { lat: +e.latlng.lat.toFixed(6), lng: +e.latlng.lng.toFixed(6) });
@@ -135,7 +138,7 @@ function renderMarkers() {
       : `<div class="${cls}" style="background:${esc(b.color || "#888")}"></div>`;
     const icon = L.divIcon({ className: "", html, iconSize: [sz, sz], iconAnchor: [sz / 2, sz / 2] });
     const m = L.marker([s.lat, s.lng], { icon, zIndexOffset: b.isOwn ? 500 : 0, title: `${b.name || ""} · ${s.name}` })
-      .on("click", () => selectStore(s.id)).addTo(S.map);
+      .on("click", () => (S.measure.on ? measureClick(s) : selectStore(s.id))).addTo(S.map);
     S.markers[s.id] = m;
   }
   drawCircle();
@@ -199,7 +202,11 @@ function renderDetail() {
   const nb = neighbours(s, S.stores.filter(x => x.status !== "closed"), S.brandsById);
   const comp = nb.filter(n => !n.own);
   const sum = radiusSummary(nb, S.radius);
-  const pop = populationWithin(s, S.radius);
+  const pop = getPop(s, S.radius);
+  if (pop == null) autoPop(s, S.radius);
+  const popLabel = pop != null ? `Est. residents within ${fmtDist(S.radius)}`
+    : S.popBusy.has(popKey(s, S.radius)) ? "Loading population (WorldPop)…"
+    : S.popFailed.has(popKey(s, S.radius)) ? "Population unavailable — see Analysis tab" : "Population";
   const nearest = comp[0];
   const avgCompSize = sum.competitorSizeKnown ? sum.competitorSqft / sum.competitorSizeKnown : null;
 
@@ -216,7 +223,7 @@ function renderDetail() {
       <div class="stat"><b>${nearest ? fmtDist(nearest.d) : "—"}</b><span>Nearest competitor${nearest ? ` (${esc(S.brandsById[nearest.store.brandId]?.name || "?")})` : ""}</span></div>
       <div class="stat"><b>${sum.competitors}</b><span>Competitor stores within ${fmtDist(S.radius)}</span></div>
       <div class="stat"><b>${sum.ownOthers}</b><span>${b.isOwn ? "Our other stores" : "Other " + esc(b.name) + " stores"} within ${fmtDist(S.radius)}</span></div>
-      <div class="stat"><b>${pop == null ? "—" : fmtNum(pop)}</b><span>${pop == null ? "Population layer not loaded" : `Est. residents within ${fmtDist(S.radius)}`}</span></div>
+      <div class="stat"><b>${pop == null ? "—" : fmtNum(pop)}</b><span>${popLabel}</span></div>
     </div>
     <dl class="kv">
       <dt>Size</dt><dd>${s.sizeSqft ? fmtNum(s.sizeSqft) + " sqft" : "—"}${avgCompSize && s.sizeSqft ? ` <span class="muted">(${s.sizeSqft >= avgCompSize ? "+" : ""}${Math.round((s.sizeSqft / avgCompSize - 1) * 100)}% vs nearby competitor avg ${fmtNum(avgCompSize)})</span>` : avgCompSize ? ` <span class="muted">(nearby competitor avg ${fmtNum(avgCompSize)} sqft)</span>` : ""}</dd>
@@ -232,7 +239,8 @@ function renderDetail() {
 
     <div><h4>Nearest stores</h4>
       ${nb.slice(0, 10).map(n => { const nbB = S.brandsById[n.store.brandId] || {};
-        return `<div class="nb" data-id="${n.store.id}"><span>${mark(nbB, 8, "vertical-align:middle")} ${esc(nbB.name)} · ${esc(n.store.name)}${n.store.sizeSqft ? ` <span class="muted">${fmtNum(n.store.sizeSqft)} sqft</span>` : ""}</span><span class="d">${fmtDist(n.d)}</span></div>`; }).join("") || '<p class="muted small">No other stores yet.</p>'}
+        return `<div class="nb" data-id="${n.store.id}" title="Click to draw the distance line on the map"><span>${mark(nbB, 8, "vertical-align:middle")} ${esc(nbB.name)} · ${esc(n.store.name)}${n.store.sizeSqft ? ` <span class="muted">${fmtNum(n.store.sizeSqft)} sqft</span>` : ""}</span><span class="d">📏 ${fmtDist(n.d)} <button class="link small" data-go="${n.store.id}" title="Open this store">↗</button></span></div>`; }).join("") || '<p class="muted small">No other stores yet.</p>'}
+      <p class="muted small">Click a row to draw the line + road distance. Use 📏 Measure on the map for any two points.</p>
     </div>
 
     <div id="poi-box"><h4>Area activity (OpenStreetMap)</h4>
@@ -244,7 +252,12 @@ function renderDetail() {
   $("#d-radius").onchange = e => setRadius(+e.target.value);
   $("#d-edit") && ($("#d-edit").onclick = () => openStoreDialog(s));
   $("#d-verify") && ($("#d-verify").onclick = () => S.api.update("stores", s.id, { status: "verified" }).then(() => toast("Marked verified")));
-  el.querySelectorAll(".nb").forEach(n => (n.onclick = () => selectStore(n.dataset.id)));
+  el.querySelectorAll(".nb").forEach(n => (n.onclick = e => {
+    const go = e.target.closest("[data-go]");
+    if (go) return selectStore(go.dataset.go);
+    const other = S.stores.find(x => x.id === n.dataset.id);
+    if (other) addMeasure(s, other, true);
+  }));
   $("#d-poi").onclick = async e => {
     e.target.disabled = true; e.target.textContent = "Loading…";
     try {
@@ -269,19 +282,22 @@ let sortKey = "Competitors in radius", sortDir = -1, analysisRows = [];
 
 function renderAnalysis() {
   const info = popGridInfo();
-  $("#pop-status").innerHTML = info
-    ? `Population: ${esc(info.source)} ${esc(info.year)} (${fmtNum(info.cells)} grid cells). Estimates only.`
-    : `Population layer not loaded. Run <code>tools/build_pop_grid.py</code> to add WorldPop data (see README).`;
+  $("#pop-status").innerHTML = (info
+    ? `Population: ${esc(info.source)} ${esc(info.year)} offline grid. Estimates only.`
+    : `Population: WorldPop ${WORLDPOP_YEAR} estimates, fetched automatically and saved per store &amp; radius.`);
   const active = S.stores.filter(s => s.status !== "closed");
   const ownIds = new Set(S.brands.filter(b => b.isOwn).map(b => b.id));
   const targets = active.filter(s => ownIds.size ? ownIds.has(s.brandId) : true);
   const R = S.radius, rkm = fmtDist(R);
+  const missing = targets.filter(x => getPop(x, R) == null && !S.popFailed.has(popKey(x, R)));
+  if (!info && missing.length && canEdit()) $("#pop-status").insertAdjacentHTML("beforeend", ` <button class="btn sm" id="pop-fill">Fill ${missing.length} missing</button>`);
+  $("#pop-fill") && ($("#pop-fill").onclick = () => fillPopulation(missing));
 
   analysisRows = targets.map(s => {
     const nb = neighbours(s, active, S.brandsById);
     const comp = nb.find(n => !n.own);
     const sum = radiusSummary(nb, R);
-    const pop = populationWithin(s, R);
+    const pop = getPop(s, R);
     return {
       _id: s.id, Store: s.name, Brand: S.brandsById[s.brandId]?.name || "",
       "Nearest competitor": comp ? S.brandsById[comp.store.brandId]?.name || "" : "",
@@ -300,7 +316,7 @@ function renderAnalysis() {
     return (typeof x === "string" ? x.localeCompare(y) : x - y) * sortDir;
   });
 
-  const cols = Object.keys(analysisRows[0] || { Store: 1 }).filter(k => k !== "_id" && !(k.startsWith("Pop") && !info));
+  const cols = Object.keys(analysisRows[0] || { Store: 1 }).filter(k => k !== "_id");
   const t = $("#analysis-table");
   if (!analysisRows.length) { t.innerHTML = `<tr><td class="muted">Add stores and mark your brand as "Ours" in Brands &amp; Team.</td></tr>`; return; }
   const comps = analysisRows.map(r => r["Competitors in radius"]), maxC = Math.max(...comps), minC = Math.min(...comps);
@@ -492,7 +508,9 @@ function wireUI() {
     } catch (x) { $("#find-error").textContent = x.message; }
     finally { btn.disabled = false; btn.textContent = "Search"; } };
 
-  document.addEventListener("keydown", e => { if (e.key === "Escape") { if (S.placing) stopPlacing(); $("#export-menu").hidden = true; } });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { if (S.placing) stopPlacing(); if (S.measure.on) toggleMeasure(false); $("#export-menu").hidden = true; } });
+  $("#measure-btn").onclick = () => toggleMeasure(!S.measure.on);
+  $("#measure-clear").onclick = clearMeasures;
 
   // Map export (JPG / PDF)
   $("#logo-toggle").checked = S.showLogos;
@@ -501,6 +519,105 @@ function wireUI() {
   document.addEventListener("click", e => { if (!e.target.closest(".map-export")) $("#export-menu").hidden = true; });
   $("#export-menu").onclick = e => { const b = e.target.closest("button[data-fmt]"); if (b) exportMap(b.dataset.fmt, +b.dataset.size); };
 }
+
+/* =========================================================== POPULATION (auto) */
+const popKey = (s, r) => `${s.id}:${r}`;
+
+/** Offline grid if present, else the WorldPop value cached on the store (pop[radius]). */
+function getPop(s, r) {
+  const g = populationWithin(s, r);
+  if (g != null) return g;
+  const c = s.pop?.[String(r)];
+  // cache is only valid if the store hasn't moved since it was computed
+  return c && Math.abs(c.lat - s.lat) < 1e-6 && Math.abs(c.lng - s.lng) < 1e-6 ? c.v : null;
+}
+
+async function fetchPop(s, r) {
+  let v;
+  try { v = await worldpopDirect(s, r); }
+  catch (x) { if (x instanceof TypeError) v = await S.api.popStats(s.lat, s.lng, r); else throw x; } // CORS → Cloud Function
+  const cur = S.stores.find(x => x.id === s.id) || s;
+  const pop = { ...(cur.pop || {}), [String(r)]: { v: Math.round(v), lat: s.lat, lng: s.lng, year: WORLDPOP_YEAR } };
+  if (canEdit()) await S.api.update("stores", s.id, { pop });
+  else Object.assign(cur, { pop });                       // viewers: keep in memory only
+  return v;
+}
+
+function autoPop(s, r) {
+  const k = popKey(s, r);
+  if (popGridInfo() || S.popBusy.has(k) || S.popFailed.has(k)) return;
+  S.popBusy.add(k);
+  fetchPop(s, r)
+    .catch(x => { S.popFailed.add(k); console.warn("WorldPop", x); })
+    .finally(() => { S.popBusy.delete(k); if (S.selectedId === s.id) renderDetail(); renderAnalysis(); });
+}
+
+async function fillPopulation(list) {
+  const btn = $("#pop-fill"); if (btn) btn.disabled = true;
+  let ok = 0, fail = 0;
+  for (const [i, s] of list.entries()) {
+    if (btn) btn.textContent = `Fetching ${i + 1}/${list.length}…`;
+    const k = popKey(s, S.radius);
+    S.popBusy.add(k);
+    try { await fetchPop(s, S.radius); ok++; } catch { S.popFailed.add(k); fail++; }
+    S.popBusy.delete(k);
+    await new Promise(r => setTimeout(r, 300));            // be polite to the free API
+  }
+  toast(`Population filled for ${ok} stores${fail ? `, ${fail} failed` : ""}.`, 4000);
+  renderAnalysis(); renderDetail();
+}
+
+/* =========================================================== MEASURE */
+function toggleMeasure(on) {
+  S.measure.on = on; S.measure.pts = [];
+  S.measure.temp?.remove(); S.measure.temp = null;
+  $("#measure-btn").classList.toggle("active", on);
+  $("#map").style.cursor = on ? "crosshair" : "";
+  if (on) { stopPlacing(); toast("Click a store (or anywhere), then a second one. Esc to finish.", 3500); }
+}
+
+function measureClick(p) {
+  const pt = { lat: p.lat, lng: p.lng, name: p.name || "" };
+  if (!S.measure.pts.length) {
+    S.measure.pts.push(pt);
+    S.measure.temp = L.circleMarker([pt.lat, pt.lng], { radius: 7, color: "#111", weight: 2, fillColor: "#fff", fillOpacity: 1 }).addTo(S.map);
+    return;
+  }
+  const a = S.measure.pts[0];
+  S.measure.pts = []; S.measure.temp?.remove(); S.measure.temp = null;
+  addMeasure(a, pt, false);
+}
+
+function addMeasure(a, b, fit) {
+  const d = distance(a, b);
+  const item = { a: { lat: a.lat, lng: a.lng, name: a.name }, b: { lat: b.lat, lng: b.lng, name: b.name }, d, road: null, text: `${fmtDist(d)} straight` };
+  const grp = L.layerGroup().addTo(S.measure.layer);
+  L.polyline([[a.lat, a.lng], [b.lat, b.lng]], { color: "#111", weight: 2.5, dashArray: "6 6", interactive: false }).addTo(grp);
+  [a, b].forEach(p => L.circleMarker([p.lat, p.lng], { radius: 5, color: "#111", weight: 2, fillColor: "#fff", fillOpacity: 1, interactive: false }).addTo(grp));
+  const mid = [(a.lat + b.lat) / 2, (a.lng + b.lng) / 2];
+  const tip = L.tooltip({ permanent: true, direction: "top", className: "measure-tip", interactive: true }).setLatLng(mid);
+  const html = () => `<b>${fmtDist(item.d)}</b> straight${item.road ? ` · <b>${fmtDist(item.road.meters)}</b> by road · ~${fmtDur(item.road.seconds)}` : item.roadErr ? "" : " · <i>road…</i>"}` +
+    (a.name && b.name ? `<div class="mt-names">${esc(a.name)} → ${esc(b.name)}</div>` : "") + ` <button class="mt-x" title="Remove">✕</button>`;
+  tip.setContent(html()).addTo(grp);
+  item.grp = grp; S.measure.items.push(item);
+  $("#measure-clear").hidden = false;
+  const bind = () => tip.getElement()?.querySelector(".mt-x")?.addEventListener("click", ev => { ev.stopPropagation(); removeMeasure(item); });
+  bind();
+  if (fit) S.map.fitBounds([[a.lat, a.lng], [b.lat, b.lng]], { padding: [80, 80], maxZoom: 16 });
+  roadRoute(a, b).then(r => {
+    item.road = r;
+    item.text = `${fmtDist(d)} straight · ${fmtDist(r.meters)} by road · ~${fmtDur(r.seconds)}`;
+    L.polyline(r.path, { color: "#0ea5e9", weight: 5, opacity: 0.75, interactive: false }).addTo(grp);
+  }).catch(() => { item.roadErr = true; })
+    .finally(() => { tip.setContent(html()); bind(); });
+}
+
+function removeMeasure(item) {
+  item.grp.remove();
+  S.measure.items = S.measure.items.filter(x => x !== item);
+  $("#measure-clear").hidden = !S.measure.items.length;
+}
+function clearMeasures() { S.measure.items.forEach(i => i.grp.remove()); S.measure.items = []; $("#measure-clear").hidden = true; }
 
 /* =========================================================== MAP EXPORT */
 async function exportMap(fmt, longSide) {
@@ -519,14 +636,14 @@ async function exportMap(fmt, longSide) {
     let selectedLine = "";
     if (sel) {
       const nb = neighbours(sel, S.stores.filter(x => x.status !== "closed"), S.brandsById);
-      const comp = nb.find(n => !n.own), sum = radiusSummary(nb, S.radius), pop = populationWithin(sel, S.radius);
+      const comp = nb.find(n => !n.own), sum = radiusSummary(nb, S.radius), pop = getPop(sel, S.radius);
       selectedLine = `${sel.name}: nearest competitor ${comp ? fmtDist(comp.d) + " (" + (S.brandsById[comp.store.brandId]?.name || "") + ")" : "—"}` +
         ` · ${sum.competitors} competitor stores within ${fmtDist(S.radius)}` + (pop != null ? ` · ~${fmtNum(pop)} residents` : "") +
         (sel.sizeSqft ? ` · ${fmtNum(sel.sizeSqft)} sqft` : "");
     }
     const date = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
     const canvas = await renderMapCanvas({
-      map: S.map, stores, brandsById: S.brandsById, selected: sel, showLogos: S.showLogos, radius: S.radius, longSide, selectedLine,
+      map: S.map, stores, brandsById: S.brandsById, selected: sel, showLogos: S.showLogos, measures: S.measure.items.map(m => ({ a: m.a, b: m.b, path: m.road?.path, label: m.text })), radius: S.radius, longSide, selectedLine,
       title: `${S.api.org.name} — Competitor map`,
       subtitle: `${date}  ·  ${stores.length} stores in view${sel ? `  ·  radius ${fmtDist(S.radius)} around ${sel.name}` : ""}`,
       onProgress: p => (btn.textContent = `Rendering ${Math.round(p * 100)}%`),

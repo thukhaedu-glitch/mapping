@@ -87,6 +87,22 @@ export async function renderMapCanvas(opts) {
     g.setLineDash([8 * u, 6 * u]); g.lineWidth = 2.5 * u; g.strokeStyle = col; g.stroke(); g.setLineDash([]);
   }
 
+  // --- distance lines
+  for (const m of opts.measures || []) {
+    if (m.path?.length) {
+      g.beginPath(); m.path.forEach((ll, i) => { const [x, y] = px(ll); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+      g.lineWidth = 6 * u; g.strokeStyle = "rgba(14,165,233,.8)"; g.lineJoin = "round"; g.stroke();
+    }
+    const [ax, ay] = px([m.a.lat, m.a.lng]), [bx, by] = px([m.b.lat, m.b.lng]);
+    g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by);
+    g.setLineDash([8 * u, 8 * u]); g.lineWidth = 3 * u; g.strokeStyle = "#111"; g.stroke(); g.setLineDash([]);
+    g.font = `600 ${15 * u}px ${FONT}`;
+    const tw = g.measureText(m.label).width, mx = (ax + bx) / 2, my = (ay + by) / 2 - 22 * u;
+    g.fillStyle = "#111"; g.beginPath(); g.roundRect(mx - tw / 2 - 10 * u, my - 15 * u, tw + 20 * u, 30 * u, 7 * u); g.fill();
+    g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(m.label, mx, my);
+    g.textAlign = "left"; g.textBaseline = "alphabetic";
+  }
+
   // --- pins (competitors first, own brand on top)
   const sorted = [...stores].sort((a, b) => (brandsById[a.brandId]?.isOwn ? 1 : 0) - (brandsById[b.brandId]?.isOwn ? 1 : 0));
   for (const st of sorted) {

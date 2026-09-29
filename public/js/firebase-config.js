@@ -1,12 +1,12 @@
 // Firebase console → Project settings → Your apps → Web app → config ကို ဒီမှာ ကူးထည့်ပါ။
 // ဗလာထားရင် app က DEMO MODE (browser ထဲမှာပဲ data သိမ်း) နဲ့ run မယ်။
 export const firebaseConfig = {
-  apiKey: "",
-  authDomain: "",
-  projectId: "",
-  storageBucket: "",
-  messagingSenderId: "",
-  appId: "",
+  apiKey: "AIzaSyB6pSiAGXtBG6om9CTKj6zz5RU-fRLIR1c",
+  authDomain: "mapping-b41ce.firebaseapp.com",
+  projectId: "mapping-b41ce",
+  storageBucket: "mapping-b41ce.firebasestorage.app",
+  messagingSenderId: "568631883956",
+  appId: "1:568631883956:web:e0761d49b58691784dffe1",
 };
 
 // Cloud Functions region (functions/index.js နဲ့ တူရမယ်)

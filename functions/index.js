@@ -63,3 +63,28 @@ exports.placesSearch = onCall({ region: "asia-southeast1", secrets: [PLACES_API_
   }
   return { places };
 });
+
+// WorldPop population inside a circle — proxy for browsers that block the API (CORS).
+exports.populationStats = onCall({ region: "asia-southeast1", maxInstances: 5, timeoutSeconds: 60 }, async req => {
+  if (!req.auth) throw new HttpsError("unauthenticated", "Sign in first.");
+  const { orgId, lat, lng, radius } = req.data || {};
+  if (![lat, lng, radius].every(Number.isFinite) || radius <= 0 || radius > 20000) throw new HttpsError("invalid-argument", "Bad location/radius.");
+  const member = await db.doc(`orgs/${orgId}/members/${req.auth.uid}`).get();
+  if (!member.exists) throw new HttpsError("permission-denied", "Not a member of this workspace.");
+
+  const coords = [];
+  for (let i = 0; i <= 48; i++) {
+    const a = (i / 48) * 2 * Math.PI;
+    coords.push([+(lng + (radius * Math.sin(a)) / (111320 * Math.cos((lat * Math.PI) / 180))).toFixed(5), +(lat + (radius * Math.cos(a)) / 111320).toFixed(5)]);
+  }
+  const geojson = { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [coords] } }] };
+  const u = new URL("https://api.worldpop.org/v1/services/stats");
+  u.search = new URLSearchParams({ dataset: "wpgppop", year: "2020", geojson: JSON.stringify(geojson), runasync: "false" });
+  let j = await (await fetch(u)).json();
+  for (let i = 0; j.status !== "finished" && j.taskid && i < 25; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    j = await (await fetch(`https://api.worldpop.org/v1/tasks/${j.taskid}`)).json();
+  }
+  if (j.error || j.data?.total_population == null) throw new HttpsError("unavailable", "WorldPop returned no data.");
+  return { total: j.data.total_population, year: 2020 };
+});

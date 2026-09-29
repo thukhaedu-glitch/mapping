@@ -31,6 +31,7 @@ class DemoBackend {
   async bulkAdd(col, list) { list.forEach(d => (this.db[col][uid()] = { ...d, createdAt: Date.now() })); this._save(); this._emit(col); }
   async clearAll() { this.db = { brands: {}, stores: {} }; this._save(); this._emit("brands"); this._emit("stores"); }
   async placesSearch() { throw new Error("Google Places search needs the Firebase backend (Cloud Function). Demo mode မှာ မရပါ။"); }
+  async popStats() { throw new Error("Browser blocked WorldPop (CORS). Deploy with Firebase Functions, or build the offline grid with tools/build_pop_grid.py."); }
   async listMembers() { return [{ id: "demo", email: "demo@local", role: "owner" }]; }
   async invite() { throw new Error("Demo mode မှာ member invite မရပါ။"); }
   async signOut() {}
@@ -135,6 +136,10 @@ class FirebaseBackend {
     const { doc, setDoc, serverTimestamp } = this.m;
     await setDoc(doc(this.fs, "invites", email.toLowerCase().trim()),
       { orgId: this.org.id, orgName: this.org.name, role, invitedBy: this.user.email, createdAt: serverTimestamp() });
+  }
+  async popStats(lat, lng, radius) {
+    const res = await this.m.httpsCallable(this.fn, "populationStats")({ orgId: this.org.id, lat, lng, radius });
+    return res.data.total;
   }
   async placesSearch(query, bias) {
     const call = this.m.httpsCallable(this.fn, "placesSearch");

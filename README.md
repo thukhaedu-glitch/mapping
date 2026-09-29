@@ -13,6 +13,7 @@ Company တစ်ခုချင်းစီက ကိုယ့် workspace န
 | လူဦးရေ | WorldPop grid ထည့်ထားရင် radius အတွင်း estimated residents |
 | Area activity (အလုပ်အကိုင် proxy) | OpenStreetMap ကနေ ရုံး၊ ကျောင်း၊ ဆေးရုံ၊ mall၊ ဘဏ်၊ စားသောက်ဆိုင် အရေအတွက် (live, free) |
 | Analysis | ကိုယ့်ဆိုင်တိုင်းအတွက် trade-area comparison table (sort / Excel export) |
+| အကွာအဝေး တိုင်းတာ | ဆိုင် detail → **Nearest stores** ထဲက row ကိုနှိပ် → map ပေါ်မှာ မျဉ်းဆွဲပြီး မျဉ်းဖြောင့်အကွာအဝေး + လမ်းအကွာအဝေး + ကားချိန် ပြ။ Map ပေါ်က **📏 Measure** နဲ့ ဆိုင် ၂ ဆိုင် (ဒါမှမဟုတ် နေရာ ၂ ခု) ကိုနှိပ်။ Road distance က OSRM (OpenStreetMap roads, traffic မပါ) |
 | Export map | **⤓ Export map** — JPG 3000px / 6000px, PDF A3 (map + analysis table) |
 | Brand logo | Brands & Team → **+ Logo** (PNG/JPG/SVG/WebP)။ 128px အထိ ချုံ့ပြီး Firestore ထဲသိမ်း (~3–15KB) → Firebase Storage/Blaze မလို။ Map pin၊ list၊ legend၊ JPG/PDF export မှာ ပေါ်တယ်။ Map ပေါ်က **Logos** toggle နဲ့ ပိတ်/ဖွင့် |
 | Team | Owner / Admin / Editor / Viewer roles, email invite |
@@ -52,7 +53,11 @@ firebase deploy --only functions
 ```
 Search တစ်ခါ = Places request ၃ ခုအထိ (result 60)။ Workspace တစ်ခုချင်း လစဉ် quota (`functions/index.js` → `QUOTA`): free 30 / pro 500 / business 3000 searches။ ဈေးနှုန်းက Google ဘက်က ပြောင်းတတ်လို့ Google Maps Platform pricing page မှာ စစ်ပါ။
 
-## ၃။ လူဦးရေ layer (WorldPop — free)
+## ၃။ လူဦးရေ (WorldPop) — auto
+ဆိုင်ကိုနှိပ်တာနဲ့ radius အတွင်း လူဦးရေကို **WorldPop API** (free, key မလို, 2020 estimate) ကနေ အလိုလိုယူပြီး ဆိုင် record ထဲ radius အလိုက် cache လုပ်ထားတယ် (နောက်တစ်ခါ API မခေါ်တော့ဘူး၊ ဆိုင်နေရာရွှေ့ရင် ပြန်တွက်တယ်)။ Analysis tab → **Fill N missing** နဲ့ ကိုယ့်ဆိုင်အားလုံးကို တစ်ခါတည်းဖြည့်။
+Browser က WorldPop ကို CORS နဲ့ ပိတ်ရင် Cloud Function `populationStats` ကနေ ဖြတ်ခေါ်တယ် (Blaze လို)။
+
+### Offline grid (optional — API မသုံးချင်ရင် / ပိုမြန်ချင်ရင်)
 1. https://hub.worldpop.org → Population Counts → Myanmar → 100m GeoTIFF download
 2. ```bash
    pip install rasterio numpy
