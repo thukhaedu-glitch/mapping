@@ -91,6 +91,10 @@ async function busy(btn, text, fn) {
 
 function showAuth(step, invite) {
   $("#auth").hidden = false; $("#app").hidden = true;
+  // When already signed in (workspace / invite step) let them switch account
+  $("#auth-who").hidden = step === "login";
+  $("#auth-email").textContent = S.api.user?.email || "";
+  $("#auth-signout").onclick = () => { S.api.forgetOrg?.(); S.api.signOut().then(() => location.reload()); };
   if (step === "org" && S.api.user?.email && !$("#org-form").contactEmail.value) $("#org-form").contactEmail.value = S.api.user.email;
   $("#login-form").hidden = step !== "login"; $("#org-form").hidden = step !== "org"; $("#invite-box").hidden = step !== "invite";
   if (invite) { $("#invite-text").textContent = `${invite.invitedBy} invited you to "${invite.orgName}" as ${invite.role}.`; S.pendingInvite = invite; }

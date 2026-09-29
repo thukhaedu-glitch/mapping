@@ -15,7 +15,8 @@ async function requireSuperAdmin(req) {
   if (!token) throw new HttpError(401, "Sign in first.");
   const auth = getAuth(adminApp());
   let u;
-  try { u = await auth.verifyIdToken(token, true); } catch { throw new HttpError(401, "Session expired — sign in again."); }
+  // signature check only (no revocation lookup) — saves a round trip to Google on every admin request
+  try { u = await auth.verifyIdToken(token); } catch { throw new HttpError(401, "Session expired — sign in again."); }
   const allowed = superAdmins();
   if (!allowed.length) throw new HttpError(500, "SUPER_ADMIN_EMAILS env var is not set on the server.");
   if (!allowed.includes((u.email || "").toLowerCase())) throw new HttpError(403, "Not a platform admin.");
@@ -59,14 +60,17 @@ function registryKeys(name, phone) {
 
 /** Workspaces created before the registry existed get their name/phone reserved; clashes are flagged. */
 async function backfillRegistry(orgs) {
-  for (const o of orgs) {
-    o.duplicateOf = [];
-    for (const k of registryKeys(o.name, o.profile?.phone)) {
-      const ref = db().doc(`registry/${k}`), cur = await ref.get();
-      if (!cur.exists) await ref.set({ ownerUid: o.ownerUid || "", orgId: o.id, type: k.split(":")[0], at: FieldValue.serverTimestamp() });
-      else if (cur.data().orgId !== o.id) o.duplicateOf.push({ key: k.split(":")[0], orgId: cur.data().orgId });
-    }
-  }
+  const pairs = orgs.flatMap(o => { o.duplicateOf = []; return registryKeys(o.name, o.profile?.phone).map(k => ({ o, k })); });
+  if (!pairs.length) return;
+  const docs = await db().getAll(...pairs.map(p => db().doc(`registry/${p.k}`)));      // one round trip for all keys
+  const batch = db().batch();
+  let writes = 0;
+  docs.forEach((cur, i) => {
+    const { o, k } = pairs[i];
+    if (!cur.exists) { batch.set(cur.ref, { ownerUid: o.ownerUid || "", orgId: o.id, type: k.split(":")[0], at: FieldValue.serverTimestamp() }); writes++; }
+    else if (cur.data().orgId !== o.id) o.duplicateOf.push({ key: k.split(":")[0], orgId: cur.data().orgId });
+  });
+  if (writes) await batch.commit();
 }
 
 const actions = {

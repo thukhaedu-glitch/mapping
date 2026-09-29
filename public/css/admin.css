@@ -75,3 +75,5 @@
 .org h3 { margin: 0; font-size: 15px; }
 .od > [data-back] { align-self: flex-start; }
 .od-alert .acts { display: flex; gap: 6px; }
+.org-card.skeleton { height: 150px; background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.2s infinite; cursor: default; }
+@keyframes shimmer { to { background-position: -200% 0; } }

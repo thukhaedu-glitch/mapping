@@ -51,9 +51,15 @@ async function api(action, body = {}) {
 
 /* ------------------------------------------------------------ workspaces */
 async function loadOrgs() {
-  $("#orgs").innerHTML = '<p class="muted">Loading…</p>';
+  // Show the last result instantly (this browser only), then refresh from the server
+  if (!A.orgs.length) {
+    try { const c = JSON.parse(sessionStorage.getItem("sr-admin-overview") || "null"); if (c) { A.orgs = c.orgs; A.pricing = c.pricing; A.platformAI = c.platformAI; renderKpis(); renderOrgs(); } } catch {}
+    if (!A.orgs.length) $("#orgs").innerHTML = '<div class="org-grid">' + '<div class="org-card skeleton"></div>'.repeat(3) + "</div>";
+  }
   const r = await api("overview");
-  A.orgs = r.orgs; A.pricing = r.pricing; A.platformAI = r.platformAI;
+  api("users").then(u => { A.users = u.users; renderKpis(); if (!$("#tab-users").hidden) renderUsers(); }).catch(() => {});
+  try { sessionStorage.setItem("sr-admin-overview", JSON.stringify(r)); } catch {}
+  A.orgs = r.orgs; A.pricing = r.pricing; A.platformAI = r.platformAI; A.loaded = true;
   renderKpis(); renderOrgs();
 }
 
@@ -64,13 +70,14 @@ function renderKpis() {
   const newWeek = o.filter(x => x.createdAt && Date.now() - new Date(x.createdAt) < 7 * 864e5).length;
   $("#kpis").innerHTML = [
     [o.length, "Workspaces"], [count("active"), "Active"], [count("hold"), "On hold"], [count("blocked"), "Blocked"],
-    [users, "Members"], ...(unused ? [[unused, "Not in use (duplicates?)"]] : []), ...(reqs ? [[reqs, "Top-up requests"]] : []), [stores.toLocaleString(), "Stores mapped"], [newWeek, "New this week"],
+    [users, "Members"], ...(A.users.length ? [[A.users.length, "Login accounts"], [A.users.filter(u => !u.orgId || !o.some(x => x.id === u.orgId)).length, "Logins without workspace"]] : []), ...(unused ? [[unused, "Not in use (duplicates?)"]] : []), ...(reqs ? [[reqs, "Top-up requests"]] : []), [stores.toLocaleString(), "Stores mapped"], [newWeek, "New this week"],
   ].map(([v, l]) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`).join("");
 }
 
 function renderOrgs() {
   const box = $("#orgs");
   const open = A.openId && A.orgs.find(o => o.id === A.openId);
+  if (A.openId && !open && A.orgs.length >= 0 && A.loaded) { A.openId = null; history.replaceState(null, "", location.pathname); }
   $("#tab-orgs .toolbar").hidden = !!open;
   if (open) return renderOrgDetail(open);
   const q = $("#org-q").value.trim().toLowerCase(), st = $("#org-status-filter").value;
@@ -185,7 +192,7 @@ function renderUsers() {
   $("#users").innerHTML = `<thead><tr><th>Email</th><th>Workspace</th><th>Role</th><th>Sign-in</th><th>Created</th><th>Last sign-in</th><th>Status</th><th>Actions</th></tr></thead><tbody>` +
     list.map(u => `<tr>
       <td>${esc(u.email)}${u.superAdmin ? ' <span class="st super">super admin</span>' : ""}${u.verified ? "" : ' <span class="pill" title="Email not verified">unverified</span>'}</td>
-      <td>${u.orgId && orgName(u.orgId) ? `<button class="link" data-open-org="${u.orgId}">${esc(orgName(u.orgId))}</button>` : '<span class="muted">—</span>'}</td>
+      <td>${u.orgId && orgName(u.orgId) ? `<button class="link" data-open-org="${u.orgId}">${esc(orgName(u.orgId))}</button>` : '<span class="st unused">no workspace</span>'}</td>
       <td>${esc(role(u.uid, u.orgId))}</td>
       <td class="small">${u.providers.map(p => (p === "google.com" ? "Google" : p === "password" ? "Password" : p)).join(", ")}</td>
       <td>${date(u.created)}</td><td>${ago(u.lastSignIn)}</td>
@@ -226,7 +233,7 @@ function wire() {
     ["orgs", "biz", "credits", "users"].forEach(k => ($("#tab-" + k).hidden = t.dataset.tab !== k));
     if (t.dataset.tab === "biz") renderBiz();
     if (t.dataset.tab === "credits") renderCredits();
-    if (t.dataset.tab === "users" && !A.users.length) loadUsers().catch(x => toast(x.message, 5000));
+    if (t.dataset.tab === "users") A.users.length ? renderUsers() : loadUsers().catch(x => toast(x.message, 5000));
   }));
   $("#org-q").oninput = renderOrgs; $("#org-status-filter").onchange = renderOrgs;
   $("#user-q").oninput = renderUsers;
