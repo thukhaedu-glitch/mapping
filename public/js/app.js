@@ -615,6 +615,7 @@ function wireUI() {
   wireSearch();
   document.addEventListener("keydown", e => { if (e.key === "Escape") { if (S.placing) stopPlacing(); if (S.measure.on) toggleMeasure(false); $("#export-menu").hidden = true; } });
   $("#measure-btn").onclick = () => toggleMeasure(!S.measure.on);
+  wireMapView();
   $("#measure-clear").onclick = clearMeasures;
 
   // Map export (JPG / PDF)
@@ -1187,4 +1188,53 @@ async function loadSample() {
   }
   await S.api.bulkAdd("stores", rows);
   S.map.setView(MYANMAR_CENTER, 12); toast("Sample loaded — brands and stores are fictional.");
+}
+
+/* ------------------------------------------------ Hide side panel / full-screen map */
+function wireMapView() {
+  const mobile = () => matchMedia("(max-width: 860px)").matches;
+  const refit = () => { if (!S.map) return; S.map.invalidateSize(); setTimeout(() => S.map.invalidateSize(), 250); };
+  const setPanel = hidden => {
+    document.body.classList.toggle("panel-hidden", hidden);
+    const b = $("#panel-btn");
+    b.textContent = hidden ? (mobile() ? "☰ Show panel" : "» Panel") : (mobile() ? "Hide panel" : "« Panel");
+    b.title = (hidden ? "Show side panel" : "Hide side panel") + "  ( [ )";
+    b.setAttribute("aria-label", b.title);
+    try { localStorage.setItem("sr.panelHidden", hidden ? "1" : ""); } catch {}
+    refit();
+  };
+  const setFocus = on => {
+    document.body.classList.toggle("focus-map", on);
+    const b = $("#fullscreen-btn");
+    b.classList.toggle("active", on);
+    b.textContent = on ? "✕ Exit full screen" : "⤢ Full screen";
+    b.title = (on ? "Exit full screen (Esc)" : "Full-screen map") + "  ( F )";
+    refit();
+  };
+  const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+  const enterFS = async () => {
+    setFocus(true);
+    const el = document.documentElement;
+    try { await (el.requestFullscreen?.() || el.webkitRequestFullscreen?.()); } catch {} // iPhone: no API → layout-only full screen
+  };
+  const exitFS = async () => {
+    setFocus(false);
+    if (fsEl()) try { await (document.exitFullscreen?.() || document.webkitExitFullscreen?.()); } catch {}
+  };
+  const toggleFS = () => (document.body.classList.contains("focus-map") ? exitFS() : enterFS());
+
+  let saved = false; try { saved = localStorage.getItem("sr.panelHidden") === "1"; } catch {}
+  setPanel(saved);
+  $("#panel-btn").onclick = () => setPanel(!document.body.classList.contains("panel-hidden"));
+  $("#fullscreen-btn").onclick = toggleFS;
+  const onFsChange = () => { if (!fsEl() && document.body.classList.contains("focus-map")) setFocus(false); };
+  document.addEventListener("fullscreenchange", onFsChange);
+  document.addEventListener("webkitfullscreenchange", onFsChange);
+  document.addEventListener("keydown", e => {
+    if (e.ctrlKey || e.metaKey || e.altKey || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName) || document.querySelector("dialog[open]")) return;
+    if (e.key === "[") { e.preventDefault(); if (!document.body.classList.contains("focus-map")) setPanel(!document.body.classList.contains("panel-hidden")); }
+    else if (e.key === "f" || e.key === "F") { e.preventDefault(); toggleFS(); }
+    else if (e.key === "Escape" && document.body.classList.contains("focus-map")) exitFS();
+  });
+  addEventListener("resize", () => setPanel(document.body.classList.contains("panel-hidden")));
 }

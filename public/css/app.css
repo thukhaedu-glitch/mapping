@@ -201,3 +201,19 @@ img.mark { border-radius: 50%; object-fit: contain; background: #fff; border: 2p
   .filterbar select { min-width: 0; max-width: 32vw; }
   .filterbar label { font-size: 0; gap: 0; }
 }
+
+/* hide panel / full-screen map */
+.layout { transition: grid-template-columns .2s ease; }
+body.panel-hidden .layout { grid-template-columns: 0 1fr; }
+body.panel-hidden .panel { visibility: hidden; overflow: hidden; border: 0; }
+body.focus-map .topbar, body.focus-map .filterbar, body.focus-map .panel, body.focus-map #status-banner { display: none !important; }
+body.focus-map .layout { grid-template-columns: 1fr !important; grid-template-rows: 1fr !important; }
+body.focus-map #panel-btn { display: none; }
+#fullscreen-btn.active { background: #111; color: #fff; border-color: #111; }
+@media (max-width: 860px) {
+  body.panel-hidden .layout { grid-template-columns: 1fr; grid-template-rows: 1fr 0; }
+  .map-export { right: 8px; } .map-export > .row { flex-wrap: wrap; }
+  #fullscreen-btn { font-size: 0; } #fullscreen-btn::before { content: "⤢"; font-size: 15px; }
+  body.focus-map #fullscreen-btn::before { content: "✕  Exit"; font-size: 13px; }
+}
+.layout > * { min-width: 0; }
