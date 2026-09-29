@@ -11,7 +11,19 @@ function app() {
   if (getApps().length) return getApps()[0];
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (!raw) throw new HttpError(500, "Server not configured: FIREBASE_SERVICE_ACCOUNT env var is missing.");
-  return initializeApp({ credential: cert(JSON.parse(raw)) });
+  return initializeApp({ credential: cert(parseServiceAccount(raw)) });
+}
+
+// Accepts the JSON as pasted (with or without wrapping quotes), or base64 of it.
+function parseServiceAccount(raw) {
+  let t = raw.trim();
+  if ((t.startsWith("'") && t.endsWith("'")) || (t.startsWith('"') && t.endsWith('"') && !t.startsWith('"{'))) t = t.slice(1, -1);
+  if (!t.startsWith("{")) { try { t = Buffer.from(t, "base64").toString("utf8"); } catch {} }
+  let j;
+  try { j = JSON.parse(t); } catch { throw new HttpError(500, "FIREBASE_SERVICE_ACCOUNT is not valid JSON — paste the whole downloaded file, from { to }."); }
+  if (j.private_key) j.private_key = j.private_key.replace(/\\n/g, "\n");
+  if (!j.client_email || !j.private_key) throw new HttpError(500, "FIREBASE_SERVICE_ACCOUNT is missing client_email/private_key — use Project settings → Service accounts → Generate new private key.");
+  return j;
 }
 export const db = () => getFirestore(app());
 
