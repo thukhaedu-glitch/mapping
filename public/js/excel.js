@@ -2,7 +2,8 @@
 
 export const COLUMNS = [
   ["brand", "Brand"], ["name", "Store name"], ["lat", "Latitude"], ["lng", "Longitude"],
-  ["mapsLink", "Google Maps link"], ["address", "Address"], ["township", "Township"], ["city", "City"],
+  ["mapsLink", "Google Maps link"], ["address", "Address"], ["township", "Township / Area"], ["city", "City"],
+  ["phone", "Phone"], ["rating", "Google rating"], ["ratingCount", "Rating count"], ["placeId", "Google place ID"],
   ["sizeSqft", "Size (sqft)"], ["seats", "Seats"], ["type", "Type"], ["status", "Status"], ["notes", "Notes"],
 ];
 
@@ -14,9 +15,13 @@ const ALIAS = {
   lng: ["lng", "lon", "long", "longitude", "x"],
   mapsLink: ["googlemapslink", "mapslink", "maplink", "googlemaps", "link", "url", "location"],
   address: ["address", "လိပ်စာ"],
-  township: ["township", "မြို့နယ်"],
+  township: ["township", "townshiparea", "area", "district", "ward", "quarter", "neighbourhood", "neighborhood", "မြို့နယ်", "ရပ်ကွက်"],
   city: ["city", "မြို့", "region"],
-  sizeSqft: ["sizesqft", "size", "sqft", "area", "areasqft", "floorarea", "အကျယ်"],
+  sizeSqft: ["sizesqft", "size", "sqft", "areasqft", "floorarea", "floorareasqft", "အကျယ်"],
+  phone: ["phone", "phonenumber", "tel", "telephone", "mobile", "contact", "ဖုန်း"],
+  rating: ["googlerating", "rating", "stars", "avgrating", "averagerating"],
+  ratingCount: ["ratingcount", "ratingscount", "reviews", "reviewcount", "reviewscount", "userratingcount", "userratingstotal", "googlereviews", "numreviews", "totalreviews"],
+  placeId: ["googleplaceid", "placeid", "gplaceid"],
   seats: ["seats", "seating", "seat", "capacity", "ထိုင်ခုံ"],
   type: ["type", "format", "storetype"],
   status: ["status"],
@@ -46,7 +51,6 @@ export async function parseFile(file) {
   const map = {};
   Object.keys(raw[0]).forEach(h => { const f = fieldFor(h); if (f && !map[f]) map[f] = h; });
   const errors = [];
-  if (!map.brand) errors.push('No "Brand" column found — rows will be put under brand "Unknown".');
 
   const rows = [];
   raw.forEach((r, i) => {
@@ -57,7 +61,10 @@ export async function parseFile(file) {
       if (c) ({ lat, lng } = c);
     }
     const row = {
-      brand: get("brand") || "Unknown", name: get("name") || "", lat, lng,
+      brand: get("brand"), name: get("name") || "", lat, lng,
+      phone: get("phone"), placeId: get("placeId"),
+      rating: (v => (isFinite(v) && v > 0 && v <= 5 ? Math.round(v * 10) / 10 : null))(parseFloat(get("rating"))),
+      ratingCount: (v => (isFinite(v) && v >= 0 ? v : null))(parseInt(get("ratingCount").replace(/[^0-9]/g, ""))),
       address: get("address"), township: get("township"), city: get("city"),
       sizeSqft: parseFloat(get("sizeSqft")) || null, seats: parseInt(get("seats")) || null,
       type: get("type"), status: (get("status") || "verified").toLowerCase(), notes: get("notes"),
@@ -69,7 +76,7 @@ export async function parseFile(file) {
     }
     rows.push(row);
   });
-  return { rows, errors };
+  return { rows, errors, hasBrand: !!map.brand, columns: Object.keys(map) };
 }
 
 function download(wb, filename) { XLSX.writeFile(wb, filename, { compression: true }); }
@@ -78,12 +85,13 @@ export function exportStores(stores, brandsById) {
   const data = stores.map(s => ({
     Brand: brandsById[s.brandId]?.name || "", "Store name": s.name, Latitude: s.lat, Longitude: s.lng,
     Address: s.address || "", Township: s.township || "", City: s.city || "",
+    Phone: s.phone || "", "Google rating": s.rating ?? "", "Rating count": s.ratingCount ?? "", "Google place ID": s.placeId || "",
     "Size (sqft)": s.sizeSqft || "", Seats: s.seats || "", Type: s.type || "", Status: s.status || "",
     Source: s.source || "", Notes: s.notes || "",
   }));
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(data);
-  ws["!cols"] = [16, 28, 11, 11, 36, 16, 12, 10, 7, 12, 10, 10, 30].map(w => ({ wch: w }));
+  ws["!cols"] = [16, 28, 11, 11, 36, 16, 12, 16, 8, 8, 28, 10, 7, 12, 10, 10, 30].map(w => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, ws, "Stores");
   download(wb, `stores-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
@@ -97,11 +105,7 @@ export function exportAnalysis(rows, radiusKm) {
 }
 
 export function downloadTemplate() {
-  const header = COLUMNS.map(c => c[1]);
-  const example = ["Example Brand", "Example Branch (delete this row)", 16.8, 96.15, "", "Street, Ward", "Township", "Yangon", 1800, 60, "Dine-in", "verified", "Either Latitude+Longitude OR a Google Maps link is enough"];
-  const ws = XLSX.utils.aoa_to_sheet([header, example]);
-  ws["!cols"] = [16, 30, 11, 11, 40, 30, 16, 12, 10, 7, 12, 10, 40].map(w => ({ wch: w }));
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Stores");
-  download(wb, "store-import-template.xlsx");
+  // Formatted template (required columns in red, dropdowns, "How to fill" sheet) — public/templates/
+  const a = Object.assign(document.createElement("a"), { href: "templates/storeradar-import-template.xlsx", download: "storeradar-import-template.xlsx" });
+  document.body.appendChild(a); a.click(); a.remove();
 }

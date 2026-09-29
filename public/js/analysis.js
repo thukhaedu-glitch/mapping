@@ -30,7 +30,10 @@ export function radiusSummary(nbrs, radiusM) {
   const byBrand = {};
   comp.forEach(n => (byBrand[n.store.brandId] = (byBrand[n.store.brandId] || 0) + 1));
   const compSizes = comp.map(n => +n.store.sizeSqft).filter(v => v > 0);
+  const rated = comp.filter(n => n.store.rating > 0);
   return {
+    competitorReviews: comp.reduce((t, n) => t + (+n.store.ratingCount || 0), 0),
+    competitorRating: rated.length ? Math.round((rated.reduce((t, n) => t + +n.store.rating, 0) / rated.length) * 10) / 10 : null,
     competitors: comp.length,
     ownOthers: inside.length - comp.length,
     byBrand,

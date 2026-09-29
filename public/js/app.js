@@ -165,6 +165,7 @@ function startApp() {
   started = true;
 
   initMap(); wireUI();
+  checkFeatures();
   checkProfile();
   checkVerified();
   // keep asking until the business details are complete
@@ -252,7 +253,7 @@ function renderStoreList() {
     const b = S.brandsById[s.brandId] || {};
     return `<li data-id="${s.id}" class="${s.id === S.selectedId ? "sel" : ""}">
       ${mark(b, 12)}
-      <div class="main"><div class="t">${esc(s.name || "(no name)")}</div><div class="s">${esc(b.name || "?")} · ${esc([s.township, s.city].filter(Boolean).join(", ") || s.address || "")}</div></div>
+      <div class="main"><div class="t">${esc(s.name || "(no name)")}</div><div class="s">${esc(b.name || "?")} · ${s.rating ? `⭐ ${s.rating}${s.ratingCount != null ? ` (${fmtNum(s.ratingCount)})` : ""} · ` : ""}${esc([s.township, s.city].filter(Boolean).join(", ") || s.address || "")}</div></div>
       ${s.status === "pending" ? '<span class="pill pending">pending</span>' : s.status === "closed" ? '<span class="pill closed">closed</span>' : b.isOwn ? '<span class="pill own">ours</span>' : ""}
     </li>`;
   }).join("") : `<li class="muted small" style="cursor:default">No stores yet — add one, import an Excel file, or use the Find tab.</li>`;
@@ -299,6 +300,8 @@ function renderDetail() {
     </div>
     <dl class="kv">
       <dt>Size</dt><dd>${s.sizeSqft ? fmtNum(s.sizeSqft) + " sqft" : "—"}${avgCompSize && s.sizeSqft ? ` <span class="muted">(${s.sizeSqft >= avgCompSize ? "+" : ""}${Math.round((s.sizeSqft / avgCompSize - 1) * 100)}% vs nearby competitor avg ${fmtNum(avgCompSize)})</span>` : avgCompSize ? ` <span class="muted">(nearby competitor avg ${fmtNum(avgCompSize)} sqft)</span>` : ""}</dd>
+      <dt>Google rating</dt><dd>${s.rating ? `⭐ ${s.rating}${s.ratingCount != null ? ` · ${fmtNum(s.ratingCount)} reviews` : ""}` : "—"}${sum.competitorReviews ? ` <span class="muted">(competitors within ${fmtDist(S.radius)}: ${fmtNum(sum.competitorReviews)} reviews${sum.competitorRating ? `, avg ⭐ ${sum.competitorRating}` : ""})</span>` : ""}</dd>
+      ${s.phone ? `<dt>Phone</dt><dd><a href="tel:${esc(s.phone)}">${esc(s.phone)}</a></dd>` : ""}
       <dt>Seats</dt><dd>${s.seats || "—"}</dd>
       <dt>Type</dt><dd>${esc(s.type || "—")}</dd>
       <dt>Address</dt><dd>${esc([s.address, s.township, s.city].filter(Boolean).join(", ") || "—")}</dd>
@@ -311,7 +314,7 @@ function renderDetail() {
 
     <div><h4>Nearest stores</h4>
       ${nb.slice(0, 10).map(n => { const nbB = S.brandsById[n.store.brandId] || {};
-        return `<div class="nb" data-id="${n.store.id}" title="Click to draw the distance line on the map"><span>${mark(nbB, 8, "vertical-align:middle")} ${esc(nbB.name)} · ${esc(n.store.name)}${n.store.sizeSqft ? ` <span class="muted">${fmtNum(n.store.sizeSqft)} sqft</span>` : ""}</span><span class="d">📏 ${fmtDist(n.d)} <button class="link small" data-go="${n.store.id}" title="Open this store">↗</button></span></div>`; }).join("") || '<p class="muted small">No other stores yet.</p>'}
+        return `<div class="nb" data-id="${n.store.id}" title="Click to draw the distance line on the map"><span>${mark(nbB, 8, "vertical-align:middle")} ${esc(nbB.name)} · ${esc(n.store.name)}${n.store.sizeSqft ? ` <span class="muted">${fmtNum(n.store.sizeSqft)} sqft</span>` : ""}${n.store.rating ? ` <span class="muted">⭐${n.store.rating}${n.store.ratingCount != null ? ` (${fmtNum(n.store.ratingCount)})` : ""}</span>` : ""}</span><span class="d">📏 ${fmtDist(n.d)} <button class="link small" data-go="${n.store.id}" title="Open this store">↗</button></span></div>`; }).join("") || '<p class="muted small">No other stores yet.</p>'}
       <p class="muted small">Click a row to draw the line + road distance. Use 📏 Measure on the map for any two points.</p>
     </div>
 
@@ -386,6 +389,8 @@ function renderAnalysis() {
       "Competitor sqft in radius": sum.competitorSqft || null,
       "Own stores in radius": sum.ownOthers,
       "Size (sqft)": s.sizeSqft || null,
+      "Rating": s.rating || null, "Reviews": s.ratingCount ?? null,
+      "Competitor reviews in radius": sum.competitorReviews || null,
       "Population in radius": pop == null ? null : Math.round(pop),
       "Pop per store": pop == null ? null : Math.round(pop / (sum.competitors + sum.ownOthers + 1)),
     };
@@ -448,7 +453,7 @@ function openStoreDialog(store, preset = {}) {
   f.brandId.innerHTML = S.brands.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join("");
   const v = { brandId: S.brands[0].id, status: "verified", ...store, ...preset };
   for (const el of f.elements) if (el.name && el.name in v) el.value = v[el.name] ?? "";
-  if (!store) ["name", "address", "township", "city", "sizeSqft", "seats", "notes", "mapsLink", "type"].forEach(k => { if (!(k in preset)) f[k].value = ""; });
+  if (!store) ["name", "address", "township", "city", "sizeSqft", "seats", "notes", "mapsLink", "type", "phone", "rating", "ratingCount"].forEach(k => { if (!(k in preset)) f[k].value = ""; });
   f.mapsLink.value = "";
   $("#store-dialog-title").textContent = store ? "Edit store" : "Add store";
   $("#store-delete").hidden = !store || !canEdit();
@@ -516,18 +521,10 @@ function wireUI() {
   $("#import-file").onchange = async e => {
     const file = e.target.files[0]; e.target.value = "";
     if (!file) return;
-    try {
-      const { rows, errors } = await parseFile(file);
-      if (!rows.length) return alert("No importable rows.\n\n" + errors.join("\n"));
-      const byName = Object.fromEntries(S.brands.map(b => [b.name.toLowerCase(), b.id]));
-      const newBrands = [...new Set(rows.map(r => r.brand))].filter(n => !byName[n.toLowerCase()]);
-      const msg = `Import ${rows.length} stores?` + (newBrands.length ? `\n\nNew brands will be created: ${newBrands.join(", ")}` : "") + (errors.length ? `\n\n${errors.length} row(s) skipped:\n${errors.slice(0, 8).join("\n")}${errors.length > 8 ? "\n…" : ""}` : "");
-      if (!confirm(msg)) return;
-      for (const n of newBrands) byName[n.toLowerCase()] = await S.api.add("brands", { name: n, color: randomColor(), isOwn: false, aliases: [] });
-      await S.api.bulkAdd("stores", rows.map(({ brand, ...r }) => ({ ...r, brandId: byName[brand.toLowerCase()], source: "excel" })));
-      toast(`Imported ${rows.length} stores.`);
-      const pts = rows.map(r => [r.lat, r.lng]); if (pts.length) S.map.fitBounds(pts, { padding: [40, 40], maxZoom: 15 });
-    } catch (x) { alert("Could not read that file: " + x.message); }
+    let parsed;
+    try { parsed = await parseFile(file); } catch (x) { return alert("Could not read that file: " + x.message); }
+    if (!parsed.rows.length) return alert("No importable rows.\n\n" + parsed.errors.join("\n"));
+    importDialog(parsed);
   };
 
   // Store dialog
@@ -537,7 +534,8 @@ function wireUI() {
     if ($("#store-dialog").returnValue !== "save") return;
     const v = Object.fromEntries(new FormData(f));
     delete v.mapsLink;
-    const data = { ...v, lat: +v.lat, lng: +v.lng, sizeSqft: v.sizeSqft ? +v.sizeSqft : null, seats: v.seats ? +v.seats : null };
+    const data = { ...v, lat: +v.lat, lng: +v.lng, sizeSqft: v.sizeSqft ? +v.sizeSqft : null, seats: v.seats ? +v.seats : null,
+      rating: v.rating ? Math.min(5, +v.rating) : null, ratingCount: v.ratingCount !== "" && v.ratingCount != null ? +v.ratingCount : null };
     try {
       if (S.editingId) { await S.api.update("stores", S.editingId, data); toast("Saved"); }
       else { const id = await S.api.add("stores", { ...data, source: "manual" }); selectStore(id); toast("Store added"); }
@@ -616,6 +614,17 @@ function wireUI() {
   $("#export-map-btn").onclick = e => { e.stopPropagation(); $("#export-menu").hidden = !$("#export-menu").hidden; };
   document.addEventListener("click", e => { if (!e.target.closest(".map-export")) $("#export-menu").hidden = true; });
   $("#export-menu").onclick = e => { const b = e.target.closest("button[data-fmt]"); if (b) exportMap(b.dataset.fmt, +b.dataset.size); };
+}
+
+/* =========================================================== SERVER FEATURES */
+// Google Places search needs the platform's PLACES_API_KEY. Hide it when that isn't set, so people use the AI finder instead.
+async function checkFeatures() {
+  if (S.api.mode === "demo") return;
+  try {
+    const r = await fetch("/api/config");
+    const c = r.ok ? await r.json() : {};
+    $("#places-block").hidden = !c.places;
+  } catch { $("#places-block").hidden = true; }
 }
 
 /* =========================================================== VERIFICATION BADGE */
@@ -805,11 +814,12 @@ async function runInsight(s, nb, sum, pop, btn) {
   const out = $("#ai-insight");
   const bName = id => S.brandsById[id]?.name || "?";
   const stats = {
-    store: { name: s.name, brand: bName(s.brandId), ours: !!S.brandsById[s.brandId]?.isOwn, township: s.township, city: s.city, sizeSqft: s.sizeSqft, seats: s.seats, type: s.type },
+    store: { name: s.name, brand: bName(s.brandId), ours: !!S.brandsById[s.brandId]?.isOwn, township: s.township, city: s.city, sizeSqft: s.sizeSqft, seats: s.seats, type: s.type, googleRating: s.rating || null, googleReviews: s.ratingCount ?? null },
+    competitorGoogleReviewsInRadius: sum.competitorReviews || null, competitorAvgRatingInRadius: sum.competitorRating || null,
     radiusMeters: S.radius,
     competitorsInRadius: sum.competitors, competitorsByBrand: Object.fromEntries(Object.entries(sum.byBrand).map(([k, v]) => [bName(k), v])),
     competitorSqftInRadius: sum.competitorSqft || null, ownOtherStoresInRadius: sum.ownOthers,
-    nearest: nb.slice(0, 6).map(n => ({ brand: bName(n.store.brandId), name: n.store.name, meters: Math.round(n.d), sizeSqft: n.store.sizeSqft || null, ours: n.own })),
+    nearest: nb.slice(0, 6).map(n => ({ brand: bName(n.store.brandId), name: n.store.name, meters: Math.round(n.d), sizeSqft: n.store.sizeSqft || null, rating: n.store.rating || null, reviews: n.store.ratingCount ?? null, ours: n.own })),
     populationInRadius: pop == null ? null : Math.round(pop),
     populationPerStoreInRadius: pop == null ? null : Math.round(pop / (sum.competitors + sum.ownOthers + 1)),
     areaActivityOSM: S.lastPoi?.id === s.id && S.lastPoi.radius === S.radius ? S.lastPoi.counts : null,
@@ -963,6 +973,67 @@ async function exportMap(fmt, longSide) {
     toast("Export ready");
   } catch (x) { toast("Export failed: " + x.message, 5000); console.error(x); }
   finally { btn.disabled = false; btn.textContent = label; }
+}
+
+/* =========================================================== EXCEL IMPORT */
+function importDialog({ rows, errors, hasBrand, columns }) {
+  const d = document.createElement("dialog");
+  const brandOpts = S.brands.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join("");
+  d.innerHTML = `<form method="dialog" class="stack">
+    <h3>Import ${rows.length} stores</h3>
+    <p class="muted small">Columns found: ${columns.map(c => `<code>${esc(c)}</code>`).join(" ")}</p>
+    ${hasBrand ? "" : `
+      <label>Which brand are these stores?
+        <select name="brand">${brandOpts}<option value="__new" ${S.brands.length ? "" : "selected"}>+ New brand…</option></select></label>
+      <input name="newBrand" placeholder="New brand name, e.g. Pizza Hut" ${S.brands.length ? "hidden" : ""} />
+      <label class="small" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" name="auto" checked />
+        Auto-detect the brand from the store name when it matches one of your brands (e.g. “Pizza Hut Hledan” → Pizza Hut)</label>`}
+    <p class="small" id="imp-summary"></p>
+    ${errors.length ? `<details><summary class="small">${errors.length} row(s) skipped</summary><div class="small muted">${errors.slice(0, 30).map(esc).join("<br>")}</div></details>` : ""}
+    <div class="row gap" style="justify-content:flex-end"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ok">Import</button></div>
+  </form>`;
+  document.body.appendChild(d);
+  const f = d.querySelector("form");
+  // brand for each row → then drop rows already on the map (same Google place ID, or same brand within 40 m)
+  const plan = () => {
+    const byName = Object.fromEntries(S.brands.map(b => [b.name.toLowerCase(), b.id]));
+    const fallback = hasBrand ? null : f.brand.value === "__new" ? "new:" + (f.newBrand.value.trim() || "Imported") : f.brand.value;
+    const out = rows.map(r => {
+      let brandId = r.brand ? byName[r.brand.toLowerCase()] || "new:" + r.brand : null;
+      if (!brandId && !hasBrand && f.auto?.checked) brandId = matchBrand(r.name, S.brands);
+      return { ...r, brandId: brandId || fallback };
+    });
+    const dup = r => S.stores.some(s => (r.placeId && s.placeId === r.placeId) || (s.brandId === r.brandId && distance(s, r) < 40));
+    const fresh = [];
+    for (const r of out)                                  // also drop repeats inside the same file
+      if (!dup(r) && !fresh.some(x => (r.placeId && x.placeId === r.placeId) || (x.brandId === r.brandId && distance(x, r) < 40))) fresh.push(r);
+    const skipped = out.length - fresh.length;
+    const newBrands = [...new Set(fresh.map(r => r.brandId).filter(b => b?.startsWith("new:")).map(b => b.slice(4)))];
+    const auto = hasBrand ? 0 : fresh.filter(r => r.brandId !== fallback).length;
+    $("#imp-summary").innerHTML = `<b>${fresh.length}</b> will be added` + (skipped ? ` · <b>${skipped}</b> duplicates skipped (already on the map or repeated in the file)` : "") +
+      (auto ? ` · ${auto} matched to a brand by name` : "") + (newBrands.length ? `<br>New brand: ${newBrands.map(esc).join(", ")}` : "") +
+      (rows.some(r => r.ratingCount != null) ? `<br>Google rating &amp; review counts included.` : "");
+    return { fresh, newBrands };
+  };
+  if (!hasBrand) {
+    f.brand.onchange = () => { f.newBrand.hidden = f.brand.value !== "__new"; plan(); };
+    f.newBrand.oninput = plan; f.auto.onchange = plan;
+  }
+  plan();
+  d.addEventListener("close", async () => {
+    const ok = d.returnValue === "ok";
+    const { fresh, newBrands } = plan();
+    d.remove();
+    if (!ok || !fresh.length) return;
+    try {
+      const ids = {};
+      for (const n of newBrands) ids["new:" + n] = await S.api.add("brands", { name: n, color: randomColor(), isOwn: false, aliases: [] });
+      await S.api.bulkAdd("stores", fresh.map(({ brand, brandId, ...r }) => ({ ...r, brandId: ids[brandId] || brandId, source: "excel" })));
+      toast(`Imported ${fresh.length} stores.`);
+      S.map.fitBounds(fresh.map(r => [r.lat, r.lng]), { padding: [40, 40], maxZoom: 15 });
+    } catch (x) { alert("Import failed: " + x.message); }
+  });
+  d.showModal();
 }
 
 /* =========================================================== HELPERS */

@@ -115,6 +115,7 @@
 
         <!-- FIND -->
         <section class="tabpane" id="tab-find" hidden>
+<div id="places-block">
           <h4>Find stores with Google Places</h4>
           <p class="muted small">Searches Google Maps, auto-matches each result to a brand by name/aliases, and adds them as <b>pending</b> for you to verify. Google's Myanmar coverage is incomplete — cross-check with each brand's Facebook page.</p>
           <form id="find-form" class="stack">
@@ -125,6 +126,7 @@
           </form>
           <p class="error" id="find-error"></p>
           <div id="find-results"></div>
+          </div>
 
           <h4 class="mt">✨ AI: find branches on the web</h4>
           <p class="muted small">Your AI searches the brand's website, Facebook page and delivery apps for its branch list. Addresses come with sources; coordinates are often missing — paste a Google Maps link to place those. Everything is added as <b>pending</b>.</p>
@@ -256,6 +258,9 @@
         <label>Type<select name="type"><option></option><option>Dine-in</option><option>Delivery only</option><option>Kiosk</option><option>Mall counter</option><option>Drive-thru</option></select></label>
         <label>Size (sqft)<input name="sizeSqft" type="number" min="0" /></label>
         <label>Seats<input name="seats" type="number" min="0" /></label>
+        <label>Phone<input name="phone" type="tel" /></label>
+        <label>Google rating<input name="rating" type="number" min="0" max="5" step="0.1" /></label>
+        <label>Reviews<input name="ratingCount" type="number" min="0" /></label>
         <label>Status<select name="status"><option value="verified">Verified</option><option value="pending">Pending</option><option value="closed">Closed</option></select></label>
       </div>
       <label>Notes<textarea name="notes" rows="2"></textarea></label>
