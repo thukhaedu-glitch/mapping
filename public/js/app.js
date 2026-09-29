@@ -2,6 +2,7 @@ import { createBackend, hasFirebase } from "./data.js";
 import { distance, fmtDist, fmtNum, neighbours, radiusSummary, loadPopGrid, popGridInfo, populationWithin, poiCounts, POI_GROUPS, matchBrand, worldpopDirect, WORLDPOP_YEAR, roadRoute, fmtDur } from "./analysis.js";
 import { TILES } from "./tiles.js";
 import { PROVIDERS } from "./ai-core.js";
+import { DIVISIONS, divisionOf } from "./myanmar.js";
 import { renderMapCanvas, renderTableCanvas, exportJPG, exportPDF } from "./export.js";
 import { parseFile, exportStores, exportAnalysis, downloadTemplate, coordsFromLink } from "./excel.js";
 
@@ -12,6 +13,7 @@ const toast = (msg, ms = 2600) => { const t = $("#toast"); t.textContent = msg; 
 const S = {
   api: null, brands: [], stores: [], brandsById: {}, hidden: new Set(),
   selectedId: null, radius: 1000, placing: false, editingId: null, map: null, markers: {}, circle: null, findResults: [],
+  filter: { brand: "", division: "", township: "" },
   measure: { on: false, pts: [], items: [], layer: null, temp: null }, popBusy: new Set(), popFailed: new Set(),
 };
 // Brand mark: logo if uploaded, else a colour dot. size in px.
@@ -228,10 +230,16 @@ function startPlacing() { S.placing = true; $("#map-hint").hidden = false; $("#m
 function stopPlacing() { S.placing = false; $("#map-hint").hidden = true; $("#map").style.cursor = ""; }
 
 /* =========================================================== RENDER */
-function visibleStores() {
-  return S.stores.filter(s => isFinite(s.lat) && isFinite(s.lng) && !S.hidden.has(s.brandId));
+const tspKey = t => String(t || "").trim().toLowerCase();
+/** Brand / division / township filter from the bar under the top bar. */
+function passes(s) {
+  const f = S.filter;
+  return (!f.brand || s.brandId === f.brand) && (!f.division || divisionOf(s) === f.division) && (!f.township || tspKey(s.township) === f.township);
 }
-function renderAll() { renderFilter(); renderStoreList(); renderMarkers(); renderDetail(); renderBrands(); renderAnalysis(); }
+function visibleStores() {
+  return S.stores.filter(s => isFinite(s.lat) && isFinite(s.lng) && !S.hidden.has(s.brandId) && passes(s));
+}
+function renderAll() { renderFilterBar(); renderFilter(); renderStoreList(); renderMarkers(); renderDetail(); renderBrands(); renderAnalysis(); }
 
 function renderFilter() {
   $("#brand-names").innerHTML = S.brands.map(b => `<option value="${esc(b.name)}">`).join("");
@@ -244,7 +252,7 @@ function renderFilter() {
 function renderStoreList() {
   const q = $("#store-search").value.trim().toLowerCase(), pend = $("#pending-only").checked;
   const list = S.stores
-    .filter(s => !S.hidden.has(s.brandId))
+    .filter(s => !S.hidden.has(s.brandId) && passes(s))
     .filter(s => !pend || s.status === "pending")
     .filter(s => !q || [s.name, s.township, s.city, s.address, S.brandsById[s.brandId]?.name].join(" ").toLowerCase().includes(q))
     .sort((a, b) => (S.brandsById[b.brandId]?.isOwn || 0) - (S.brandsById[a.brandId]?.isOwn || 0) || (a.name || "").localeCompare(b.name || ""));
@@ -370,7 +378,7 @@ function renderAnalysis() {
     : `Population: WorldPop ${WORLDPOP_YEAR} estimates, fetched automatically and saved per store &amp; radius.`);
   const active = S.stores.filter(s => s.status !== "closed");
   const ownIds = new Set(S.brands.filter(b => b.isOwn).map(b => b.id));
-  const targets = active.filter(s => ownIds.size ? ownIds.has(s.brandId) : true);
+  const targets = active.filter(s => (ownIds.size ? ownIds.has(s.brandId) : true) && (!S.filter.division || divisionOf(s) === S.filter.division) && (!S.filter.township || tspKey(s.township) === S.filter.township));
   const R = S.radius, rkm = fmtDist(R);
   const missing = targets.filter(x => getPop(x, R) == null && !S.popFailed.has(popKey(x, R)));
   if (!info && missing.length && canEdit()) $("#pop-status").insertAdjacentHTML("beforeend", ` <button class="btn sm" id="pop-fill">Fill ${missing.length} missing</button>`);
@@ -453,7 +461,7 @@ function openStoreDialog(store, preset = {}) {
   f.brandId.innerHTML = S.brands.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join("");
   const v = { brandId: S.brands[0].id, status: "verified", ...store, ...preset };
   for (const el of f.elements) if (el.name && el.name in v) el.value = v[el.name] ?? "";
-  if (!store) ["name", "address", "township", "city", "sizeSqft", "seats", "notes", "mapsLink", "type", "phone", "rating", "ratingCount"].forEach(k => { if (!(k in preset)) f[k].value = ""; });
+  if (!store) ["name", "address", "township", "city", "sizeSqft", "seats", "notes", "mapsLink", "type", "phone", "rating", "ratingCount", "division"].forEach(k => { if (!(k in preset)) f[k].value = ""; });
   f.mapsLink.value = "";
   $("#store-dialog-title").textContent = store ? "Edit store" : "Add store";
   $("#store-delete").hidden = !store || !canEdit();
@@ -604,6 +612,7 @@ function wireUI() {
     finally { btn.disabled = false; btn.textContent = "Search"; } };
 
   wireAI();
+  wireSearch();
   document.addEventListener("keydown", e => { if (e.key === "Escape") { if (S.placing) stopPlacing(); if (S.measure.on) toggleMeasure(false); $("#export-menu").hidden = true; } });
   $("#measure-btn").onclick = () => toggleMeasure(!S.measure.on);
   $("#measure-clear").onclick = clearMeasures;
@@ -614,6 +623,128 @@ function wireUI() {
   $("#export-map-btn").onclick = e => { e.stopPropagation(); $("#export-menu").hidden = !$("#export-menu").hidden; };
   document.addEventListener("click", e => { if (!e.target.closest(".map-export")) $("#export-menu").hidden = true; });
   $("#export-menu").onclick = e => { const b = e.target.closest("button[data-fmt]"); if (b) exportMap(b.dataset.fmt, +b.dataset.size); };
+}
+
+/* =========================================================== FILTER BAR */
+function renderFilterBar() {
+  const count = (list, key) => list.reduce((m, s) => { const k = key(s); if (k) m[k] = (m[k] || 0) + 1; return m; }, {});
+  const f = S.filter;
+  const byBrand = count(S.stores, s => s.brandId);
+  $("#f-brand").innerHTML = `<option value="">All brands</option>` + S.brands.map(b => `<option value="${b.id}" ${f.brand === b.id ? "selected" : ""}>${esc(b.name)} (${byBrand[b.id] || 0})</option>`).join("");
+  const inBrand = S.stores.filter(s => !f.brand || s.brandId === f.brand);
+  const byDiv = count(inBrand, divisionOf);
+  const divs = [...new Set([...DIVISIONS.filter(d => byDiv[d]), ...Object.keys(byDiv)])];
+  $("#f-division").innerHTML = `<option value="">All divisions</option>` + divs.map(d => `<option value="${esc(d)}" ${f.division === d ? "selected" : ""}>${esc(d)} (${byDiv[d]})</option>`).join("") +
+    (inBrand.some(s => !divisionOf(s)) ? `<option value="" disabled>— ${inBrand.filter(s => !divisionOf(s)).length} without division —</option>` : "");
+  const inDiv = inBrand.filter(s => !f.division || divisionOf(s) === f.division);
+  const byTsp = {}, label = {};
+  inDiv.forEach(s => { const k = tspKey(s.township); if (!k) return; byTsp[k] = (byTsp[k] || 0) + 1; label[k] = label[k] || s.township.trim(); });
+  $("#f-township").innerHTML = `<option value="">All townships</option>` + Object.keys(byTsp).sort((a, b) => label[a].localeCompare(label[b]))
+    .map(k => `<option value="${esc(k)}" ${f.township === k ? "selected" : ""}>${esc(label[k])} (${byTsp[k]})</option>`).join("");
+  ["brand", "division", "township"].forEach(k => $("#f-" + k).classList.toggle("on", !!f[k]));
+  const any = f.brand || f.division || f.township;
+  $("#f-clear").hidden = !any;
+  $("#f-count").textContent = any ? `Showing ${visibleStores().length} of ${S.stores.length} stores` : `${S.stores.length} stores`;
+  $("#division-list").innerHTML = DIVISIONS.map(d => `<option value="${d}">`).join("");
+}
+
+function setFilter(patch, fit = true) {
+  Object.assign(S.filter, patch);
+  if ("division" in patch && !("township" in patch)) S.filter.township = "";
+  if ("brand" in patch && S.filter.brand) S.hidden.delete(S.filter.brand);
+  const sel = S.stores.find(x => x.id === S.selectedId);
+  if (sel && !passes(sel)) S.selectedId = null;                 // don't keep a filtered-out store open
+  renderAll();
+  const pts = visibleStores().map(s => [s.lat, s.lng]);
+  if (fit && pts.length && (S.filter.brand || S.filter.division || S.filter.township)) S.map.fitBounds(pts, { padding: [50, 50], maxZoom: 15 });
+}
+
+/* =========================================================== UNIVERSAL SEARCH */
+function wireSearch() {
+  const q = $("#usearch-q"), box = $("#usearch-results");
+  let items = [], active = -1, geoTimer, geoSeq = 0;
+  $("#f-brand").onchange = e => setFilter({ brand: e.target.value });
+  $("#f-division").onchange = e => setFilter({ division: e.target.value });
+  $("#f-township").onchange = e => setFilter({ township: e.target.value });
+  $("#f-clear").onclick = () => setFilter({ brand: "", division: "", township: "" }, false);
+
+  const icon = t => ({ store: "📍", brand: "🏷️", township: "🏘️", division: "🗺️", city: "🏙️", place: "🌐" }[t] || "•");
+  const render = () => {
+    if (!q.value.trim()) { box.hidden = true; return; }
+    const groups = { store: "Stores", brand: "Brands", township: "Townships", city: "Cities", division: "Divisions", place: "Places on the map" };
+    let html = "", i = 0;
+    for (const g of Object.keys(groups)) {
+      const list = items.filter(x => x.type === g);
+      if (!list.length) continue;
+      html += `<div class="us-group">${groups[g]}</div>` + list.map(x => `<button class="us-item ${i === active ? "active" : ""}" data-i="${i++}">
+        <span class="us-ico">${x.mark || icon(x.type)}</span><span class="main"><div class="t">${esc(x.title)}</div>${x.sub ? `<div class="s">${esc(x.sub)}</div>` : ""}</span></button>`).join("");
+    }
+    if (S.geoLoading) html += `<div class="us-empty">Searching the map…</div>`;
+    box.innerHTML = html || `<div class="us-empty">No matches.</div>`;
+    box.hidden = false;
+  };
+  const localSearch = text => {
+    const t = text.toLowerCase(), has = v => String(v || "").toLowerCase().includes(t), out = [];
+    const bn = id => S.brandsById[id]?.name || "";
+    S.stores.filter(s => [s.name, s.address, s.township, s.city, divisionOf(s), s.phone, s.notes, s.placeId, bn(s.brandId)].some(has))
+      .sort((a, b) => (+!!S.brandsById[b.brandId]?.isOwn) - (+!!S.brandsById[a.brandId]?.isOwn) || (b.ratingCount || 0) - (a.ratingCount || 0)).slice(0, 8)
+      .forEach(s => out.push({ type: "store", id: s.id, title: s.name, sub: [bn(s.brandId), s.township, s.city, s.rating ? `⭐${s.rating}` : ""].filter(Boolean).join(" · "), mark: mark(S.brandsById[s.brandId], 10) }));
+    S.brands.filter(b => [b.name, ...(b.aliases || [])].some(has)).slice(0, 5)
+      .forEach(b => out.push({ type: "brand", id: b.id, title: b.name, sub: `${S.stores.filter(s => s.brandId === b.id).length} stores`, mark: mark(b, 10) }));
+    const tsp = {}, city = {}, div = {};
+    S.stores.forEach(s => {
+      if (has(s.township)) { const k = tspKey(s.township); tsp[k] = tsp[k] || { n: 0, label: s.township.trim(), div: divisionOf(s) }; tsp[k].n++; }
+      if (has(s.city)) { const k = s.city.trim(); city[k] = (city[k] || 0) + 1; }
+      const d = divisionOf(s); if (d && has(d)) div[d] = (div[d] || 0) + 1;
+    });
+    Object.entries(tsp).slice(0, 5).forEach(([k, v]) => out.push({ type: "township", id: k, div: v.div, title: v.label, sub: `${v.n} stores${v.div ? " · " + v.div : ""}` }));
+    Object.entries(city).slice(0, 3).forEach(([k, n]) => out.push({ type: "city", id: k, title: k, sub: `${n} stores` }));
+    Object.entries(div).slice(0, 3).forEach(([k, n]) => out.push({ type: "division", id: k, title: k, sub: `${n} stores` }));
+    return out;
+  };
+  // Any place in Myanmar (OpenStreetMap Nominatim — free, low volume, 1 request after typing stops)
+  const geoSearch = text => {
+    clearTimeout(geoTimer);
+    if (text.length < 3) { S.geoLoading = false; return; }
+    const seq = ++geoSeq; S.geoLoading = true;
+    geoTimer = setTimeout(async () => {
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=mm&limit=5&accept-language=en&q=${encodeURIComponent(text)}`);
+        const j = r.ok ? await r.json() : [];
+        if (seq !== geoSeq) return;
+        items = items.filter(x => x.type !== "place").concat(j.map(p => ({ type: "place", lat: +p.lat, lng: +p.lon, title: p.name || p.display_name.split(",")[0], sub: p.display_name.split(",").slice(1, 4).join(",").trim() })));
+      } catch {}
+      if (seq === geoSeq) { S.geoLoading = false; render(); }
+    }, 600);
+  };
+  const choose = x => {
+    box.hidden = true; q.blur();
+    if (x.type === "store") {
+      const s = S.stores.find(z => z.id === x.id); if (!s) return;
+      if (!passes(s) || S.hidden.has(s.brandId)) { S.hidden.delete(s.brandId); S.filter = { brand: "", division: "", township: "" }; renderAll(); }
+      selectStore(x.id);
+    } else if (x.type === "brand") setFilter({ brand: x.id });
+    else if (x.type === "township") setFilter({ division: x.div || "", township: x.id });
+    else if (x.type === "division") setFilter({ division: x.id });
+    else if (x.type === "city") { const pts = S.stores.filter(s => (s.city || "").trim() === x.id).map(s => [s.lat, s.lng]); if (pts.length) S.map.fitBounds(pts, { padding: [50, 50], maxZoom: 15 }); }
+    else if (x.type === "place") {
+      S.map.setView([x.lat, x.lng], 16);
+      S.searchPin?.remove();
+      S.searchPin = L.circleMarker([x.lat, x.lng], { radius: 10, color: "#e11d48", weight: 3, fillColor: "#fff", fillOpacity: .9 }).addTo(S.map)
+        .bindTooltip(x.title, { permanent: true, direction: "top", offset: [0, -8] });
+      setTimeout(() => { S.searchPin?.remove(); S.searchPin = null; }, 15000);
+    }
+  };
+  q.addEventListener("input", () => { active = -1; items = q.value.trim() ? localSearch(q.value.trim()) : []; geoSearch(q.value.trim()); render(); });
+  q.addEventListener("focus", () => { if (q.value.trim()) render(); });
+  q.addEventListener("keydown", e => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); active = Math.max(0, Math.min(items.length - 1, active + (e.key === "ArrowDown" ? 1 : -1))); render(); }
+    else if (e.key === "Enter") { e.preventDefault(); const x = items[active >= 0 ? active : 0]; if (x) choose(x); }
+    else if (e.key === "Escape") { box.hidden = true; q.blur(); }
+  });
+  box.addEventListener("mousedown", e => { const b = e.target.closest("[data-i]"); if (b) { e.preventDefault(); choose(items[+b.dataset.i]); } });
+  document.addEventListener("click", e => { if (!e.target.closest("#usearch")) box.hidden = true; });
+  document.addEventListener("keydown", e => { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); q.focus(); } });
 }
 
 /* =========================================================== SERVER FEATURES */

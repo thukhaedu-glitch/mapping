@@ -86,9 +86,20 @@
       <span class="badge" id="mode-badge"></span>
       <span class="badge unverified" id="unverified-badge" hidden title="Your account is waiting for verification by the StoreRadar team.">⚠ Unverified</span>
       <div class="spacer"></div>
+      <div class="usearch" id="usearch">
+        <input id="usearch-q" type="search" placeholder="Search stores, brands, townships, places…  ( / )" autocomplete="off" />
+        <div class="usearch-results" id="usearch-results" hidden></div>
+      </div>
       <span class="muted small" id="user-email"></span>
       <button class="btn sm ghost" id="signout-btn">Sign out</button>
     </header>
+    <div class="filterbar" id="filterbar">
+      <label>Brand<select id="f-brand"><option value="">All brands</option></select></label>
+      <label>Division<select id="f-division"><option value="">All divisions</option></select></label>
+      <label>Township<select id="f-township"><option value="">All townships</option></select></label>
+      <button class="btn sm ghost" id="f-clear" hidden>Clear filters</button>
+      <span class="muted small" id="f-count"></span>
+    </div>
 
     <main class="layout">
       <aside class="panel">
@@ -255,6 +266,7 @@
       <div class="grid3">
         <label>Township<input name="township" /></label>
         <label>City<input name="city" /></label>
+        <label>Division<input name="division" list="division-list" placeholder="auto from city" /></label>
         <label>Type<select name="type"><option></option><option>Dine-in</option><option>Delivery only</option><option>Kiosk</option><option>Mall counter</option><option>Drive-thru</option></select></label>
         <label>Size (sqft)<input name="sizeSqft" type="number" min="0" /></label>
         <label>Seats<input name="seats" type="number" min="0" /></label>
@@ -297,6 +309,7 @@
     </form>
   </dialog>
 
+  <datalist id="division-list"></datalist>
   <div id="toast" role="status"></div>
 </body>
 </html>

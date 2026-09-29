@@ -1,8 +1,9 @@
 // Excel / CSV import & export (SheetJS, loaded as global XLSX from CDN)
+import { divisionOf } from "./myanmar.js";
 
 export const COLUMNS = [
   ["brand", "Brand"], ["name", "Store name"], ["lat", "Latitude"], ["lng", "Longitude"],
-  ["mapsLink", "Google Maps link"], ["address", "Address"], ["township", "Township / Area"], ["city", "City"],
+  ["mapsLink", "Google Maps link"], ["address", "Address"], ["township", "Township / Area"], ["city", "City"], ["division", "Division"],
   ["phone", "Phone"], ["rating", "Google rating"], ["ratingCount", "Rating count"], ["placeId", "Google place ID"],
   ["sizeSqft", "Size (sqft)"], ["seats", "Seats"], ["type", "Type"], ["status", "Status"], ["notes", "Notes"],
 ];
@@ -16,7 +17,8 @@ const ALIAS = {
   mapsLink: ["googlemapslink", "mapslink", "maplink", "googlemaps", "link", "url", "location"],
   address: ["address", "လိပ်စာ"],
   township: ["township", "townshiparea", "area", "district", "ward", "quarter", "neighbourhood", "neighborhood", "မြို့နယ်", "ရပ်ကွက်"],
-  city: ["city", "မြို့", "region"],
+  city: ["city", "မြို့", "town"],
+  division: ["division", "region", "state", "stateregion", "divisionstate", "တိုင်း", "ပြည်နယ်", "တိုင်းဒေသကြီး"],
   sizeSqft: ["sizesqft", "size", "sqft", "areasqft", "floorarea", "floorareasqft", "အကျယ်"],
   phone: ["phone", "phonenumber", "tel", "telephone", "mobile", "contact", "ဖုန်း"],
   rating: ["googlerating", "rating", "stars", "avgrating", "averagerating"],
@@ -65,7 +67,7 @@ export async function parseFile(file) {
       phone: get("phone"), placeId: get("placeId"),
       rating: (v => (isFinite(v) && v > 0 && v <= 5 ? Math.round(v * 10) / 10 : null))(parseFloat(get("rating"))),
       ratingCount: (v => (isFinite(v) && v >= 0 ? v : null))(parseInt(get("ratingCount").replace(/[^0-9]/g, ""))),
-      address: get("address"), township: get("township"), city: get("city"),
+      address: get("address"), township: get("township"), city: get("city"), division: get("division"),
       sizeSqft: parseFloat(get("sizeSqft")) || null, seats: parseInt(get("seats")) || null,
       type: get("type"), status: (get("status") || "verified").toLowerCase(), notes: get("notes"),
     };
@@ -84,7 +86,7 @@ function download(wb, filename) { XLSX.writeFile(wb, filename, { compression: tr
 export function exportStores(stores, brandsById) {
   const data = stores.map(s => ({
     Brand: brandsById[s.brandId]?.name || "", "Store name": s.name, Latitude: s.lat, Longitude: s.lng,
-    Address: s.address || "", Township: s.township || "", City: s.city || "",
+    Address: s.address || "", Township: s.township || "", City: s.city || "", Division: divisionOf(s),
     Phone: s.phone || "", "Google rating": s.rating ?? "", "Rating count": s.ratingCount ?? "", "Google place ID": s.placeId || "",
     "Size (sqft)": s.sizeSqft || "", Seats: s.seats || "", Type: s.type || "", Status: s.status || "",
     Source: s.source || "", Notes: s.notes || "",
