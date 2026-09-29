@@ -1,7 +1,8 @@
 // Data layer — one API, two backends:
 //   FirebaseBackend: multi-tenant Firestore (orgs/{orgId}/brands|stores|members)
 //   DemoBackend:     in-browser only (localStorage), for trying the app without Firebase
-import { firebaseConfig, functionsRegion } from "./firebase-config.js";
+import { firebaseConfig, functionsRegion, apiBase } from "./firebase-config.js";
+import { callAI, extractJSON, insightTask, branchesTask } from "./ai-core.js";
 
 const FB = "https://www.gstatic.com/firebasejs/10.12.2/";
 export const hasFirebase = !!(firebaseConfig.apiKey && firebaseConfig.projectId);
@@ -32,6 +33,20 @@ class DemoBackend {
   async clearAll() { this.db = { brands: {}, stores: {} }; this._save(); this._emit("brands"); this._emit("stores"); }
   async placesSearch() { throw new Error("Google Places search needs the Firebase backend (Cloud Function). Demo mode မှာ မရပါ။"); }
   async popStats() { throw new Error("Browser blocked WorldPop (CORS). Deploy with Firebase Functions, or build the offline grid with tools/build_pop_grid.py."); }
+  // Demo: AI key lives only in this browser and is sent straight to the provider.
+  async getAISettings() { try { const a = JSON.parse(localStorage.getItem("sr-demo-ai") || "{}"); return { provider: a.provider, model: a.model, keyHint: a.key ? "…" + a.key.slice(-4) : "" }; } catch { return {}; } }
+  async saveAISettings({ provider, model, key }) {
+    let a = {}; try { a = JSON.parse(localStorage.getItem("sr-demo-ai") || "{}"); } catch {}
+    a = { ...a, provider, model, ...(key ? { key } : {}) };
+    try { localStorage.setItem("sr-demo-ai", JSON.stringify(a)); } catch {}
+  }
+  async ai(task, payload = {}) {
+    let a = {}; try { a = JSON.parse(localStorage.getItem("sr-demo-ai") || "{}"); } catch {}
+    const base = { provider: a.provider, model: a.model, key: a.key, browser: true };
+    if (task === "test") { const r = await callAI({ ...base, system: "Reply with exactly: OK", prompt: "ping" }); return { ok: true, reply: r.text.slice(0, 40) }; }
+    if (task === "insight") return callAI({ ...base, ...insightTask(payload.stats, payload.lang) });
+    if (task === "branches") { const r = await callAI({ ...base, ...branchesTask(payload.brand, payload.area) }); return { items: extractJSON(r.text), sources: r.sources }; }
+  }
   async listMembers() { return [{ id: "demo", email: "demo@local", role: "owner" }]; }
   async invite() { throw new Error("Demo mode မှာ member invite မရပါ။"); }
   async signOut() {}
@@ -42,15 +57,25 @@ class FirebaseBackend {
   constructor() { this.mode = "firebase"; this.org = null; this.user = null; }
 
   async load() {
-    const [app, auth, fs, fn] = await Promise.all([
-      import(FB + "firebase-app.js"), import(FB + "firebase-auth.js"),
-      import(FB + "firebase-firestore.js"), import(FB + "firebase-functions.js"),
+    // Cloud Functions SDK is loaded only when first needed (Places / population proxy)
+    const [app, auth, fs] = await Promise.all([
+      import(FB + "firebase-app.js"), import(FB + "firebase-auth.js"), import(FB + "firebase-firestore.js"),
     ]);
-    this.m = { ...auth, ...fs, ...fn };
+    this.m = { ...auth, ...fs };
     this.app = app.initializeApp(firebaseConfig);
     this.auth = auth.getAuth(this.app);
-    this.fs = fs.getFirestore(this.app);
-    this.fn = fn.getFunctions(this.app, functionsRegion);
+    try {
+      // IndexedDB cache: repeat visits render from local data instantly, then sync
+      this.fs = fs.initializeFirestore(this.app, { localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }) });
+    } catch { this.fs = fs.getFirestore(this.app); }
+  }
+  async functions() {
+    if (!this.fn) {
+      const fn = await import(FB + "firebase-functions.js");
+      this.m.httpsCallable = fn.httpsCallable;
+      this.fn = fn.getFunctions(this.app, functionsRegion);
+    }
+    return this.fn;
   }
 
   onAuth(cb) { this.m.onAuthStateChanged(this.auth, u => { this.user = u; cb(u); }); }
@@ -60,42 +85,62 @@ class FirebaseBackend {
   resetPassword(email) { return this.m.sendPasswordResetEmail(this.auth, email); }
   signOut() { return this.m.signOut(this.auth); }
 
+  _cacheKey() { return "sr-org-" + this.user.uid; }
+  _saveOrg(org) { this.org = org; try { localStorage.setItem(this._cacheKey(), JSON.stringify({ id: org.id, name: org.name, role: org.role, status: org.status || "active" })); } catch {} }
+  cachedOrg() { try { return JSON.parse(localStorage.getItem(this._cacheKey()) || "null"); } catch { return null; } }
+  forgetOrg() { try { localStorage.removeItem(this._cacheKey()); } catch {} }
+
   // Returns {org} if the user already belongs to one, or {invite} if one is waiting, else {}.
+  // Profile + invite are read in parallel (2 round trips max instead of 3 sequential).
   async resolveOrg() {
     const { doc, getDoc } = this.m;
     const u = this.user;
-    const profile = await getDoc(doc(this.fs, "users", u.uid));
+    const [profile, inv] = await Promise.all([
+      getDoc(doc(this.fs, "users", u.uid)),
+      getDoc(doc(this.fs, "invites", (u.email || "").toLowerCase())).catch(() => null),
+    ]);
     if (profile.exists() && profile.data().orgId) {
       const orgId = profile.data().orgId;
-      const [org, mem] = await Promise.all([
-        getDoc(doc(this.fs, "orgs", orgId)), getDoc(doc(this.fs, "orgs", orgId, "members", u.uid)),
-      ]);
-      if (org.exists() && mem.exists()) { this.org = { id: orgId, ...org.data(), role: mem.data().role }; return { org: this.org }; }
+      let org, mem;
+      try {
+        [org, mem] = await Promise.all([getDoc(doc(this.fs, "orgs", orgId)), getDoc(doc(this.fs, "orgs", orgId, "members", u.uid))]);
+      } catch (e) {
+        if (e.code === "permission-denied") return { blocked: true };   // rules deny reads of blocked workspaces
+        throw e;
+      }
+      if (org.exists() && mem.exists()) { this._saveOrg({ id: orgId, ...org.data(), role: mem.data().role }); return { org: this.org }; }
     }
-    const inv = await getDoc(doc(this.fs, "invites", (u.email || "").toLowerCase()));
-    if (inv.exists()) return { invite: inv.data() };
+    this.forgetOrg();
+    if (inv?.exists()) return { invite: inv.data() };
     return {};
   }
 
-  async createOrg(name) {
+  async createOrg(name, profile = {}) {
     const { doc, collection, setDoc, serverTimestamp } = this.m;
     const u = this.user;
     const ref = doc(collection(this.fs, "orgs"));
-    await setDoc(ref, { name, ownerUid: u.uid, plan: "free", createdAt: serverTimestamp() });
+    // Each write depends on the previous one in the security rules (org → owner → profile/brand),
+    // so they must be sequential — but the last two run in parallel and we skip re-reading.
+    await setDoc(ref, { name, ownerUid: u.uid, ownerEmail: u.email, plan: "free", status: "active", profile, createdAt: serverTimestamp() });
     await setDoc(doc(this.fs, "orgs", ref.id, "members", u.uid), { email: u.email, role: "owner", joinedAt: serverTimestamp() });
-    await setDoc(doc(this.fs, "users", u.uid), { email: u.email, orgId: ref.id });
-    // Starter brand so the map is usable immediately
-    await this.addTo(ref.id, "brands", { name: "Our brand", color: "#16a34a", isOwn: true, aliases: [] });
-    return this.resolveOrg();
+    await Promise.all([
+      setDoc(doc(this.fs, "users", u.uid), { email: u.email, orgId: ref.id }),
+      this.addTo(ref.id, "brands", { name, color: "#16a34a", isOwn: true, aliases: [] }),   // starter "ours" brand
+    ]);
+    this._saveOrg({ id: ref.id, name, plan: "free", status: "active", ownerUid: u.uid, role: "owner" });
+    return { org: this.org };
   }
 
   async acceptInvite(invite) {
     const { doc, setDoc, deleteDoc, serverTimestamp } = this.m;
     const u = this.user;
     await setDoc(doc(this.fs, "orgs", invite.orgId, "members", u.uid), { email: u.email, role: invite.role, joinedAt: serverTimestamp() });
-    await setDoc(doc(this.fs, "users", u.uid), { email: u.email, orgId: invite.orgId });
-    await deleteDoc(doc(this.fs, "invites", u.email.toLowerCase()));
-    return this.resolveOrg();
+    await Promise.all([
+      setDoc(doc(this.fs, "users", u.uid), { email: u.email, orgId: invite.orgId }),
+      deleteDoc(doc(this.fs, "invites", u.email.toLowerCase())),
+    ]);
+    this._saveOrg({ id: invite.orgId, name: invite.orgName, role: invite.role });
+    return { org: this.org };
   }
 
   col(name) { return this.m.collection(this.fs, "orgs", this.org.id, name); }
@@ -137,12 +182,39 @@ class FirebaseBackend {
     await setDoc(doc(this.fs, "invites", email.toLowerCase().trim()),
       { orgId: this.org.id, orgName: this.org.name, role, invitedBy: this.user.email, createdAt: serverTimestamp() });
   }
+  async getAISettings() {
+    const d = await this.m.getDoc(this.m.doc(this.fs, "orgs", this.org.id, "settings", "ai"));
+    return d.exists() ? d.data() : {};
+  }
+  /** Key goes to a write-only doc (rules: nobody can read it back); only a hint is kept in settings. */
+  async saveAISettings({ provider, model, key }) {
+    const { doc, setDoc, serverTimestamp } = this.m;
+    if (key) await setDoc(doc(this.fs, "orgs", this.org.id, "secrets", "ai"), { key, updatedAt: serverTimestamp() });
+    const data = { provider, model, updatedBy: this.user.email, updatedAt: serverTimestamp() };
+    if (key) data.keyHint = "…" + key.slice(-4);
+    await setDoc(doc(this.fs, "orgs", this.org.id, "settings", "ai"), data, { merge: true });
+  }
+  ai(task, payload = {}) {
+    if (!apiBase) throw new Error("AI features need the Vercel API (apiBase = \"/api\").");
+    return this.api("ai", { orgId: this.org.id, task, ...payload });
+  }
+
+  /** POST to the Vercel API with the user's Firebase ID token. */
+  async api(path, body) {
+    const token = await this.auth.currentUser.getIdToken();
+    const r = await fetch(`${apiBase}/${path}`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({ error: `Server error ${r.status}` }));
+    if (!r.ok) throw new Error(j.error || `Server error ${r.status}`);
+    return j;
+  }
   async popStats(lat, lng, radius) {
-    const res = await this.m.httpsCallable(this.fn, "populationStats")({ orgId: this.org.id, lat, lng, radius });
+    if (apiBase) return (await this.api("population", { orgId: this.org.id, lat, lng, radius })).total;
+    const res = await this.m.httpsCallable(await this.functions(), "populationStats")({ orgId: this.org.id, lat, lng, radius });
     return res.data.total;
   }
   async placesSearch(query, bias) {
-    const call = this.m.httpsCallable(this.fn, "placesSearch");
+    if (apiBase) return (await this.api("places", { orgId: this.org.id, query, bias })).places;
+    const call = this.m.httpsCallable(await this.functions(), "placesSearch");
     const res = await call({ orgId: this.org.id, query, bias });
     return res.data.places;
   }

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>StoreRadar Admin</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23111'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%23e11d48'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+Myanmar:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/app.css" />
+  <link rel="stylesheet" href="css/admin.css" />
+  <script type="module" src="js/admin.js"></script>
+</head>
+<body>
+  <div id="login" class="overlay" hidden>
+    <div class="auth-card">
+      <div class="logo"><span class="dot"></span>StoreRadar <span class="badge">Admin</span></div>
+      <p class="muted small">Platform admin only. Sign in with Google (recommended — your email must be verified).</p>
+      <button class="btn primary full" id="google">Sign in with Google</button>
+      <form id="pw-form" class="stack">
+        <label>Email<input name="email" type="email" required autocomplete="email" /></label>
+        <label>Password<input name="password" type="password" required autocomplete="current-password" /></label>
+        <button class="btn full">Sign in with password</button>
+        <button class="link small" type="button" id="forgot">Forgot password?</button>
+      </form>
+      <div id="verify-box" class="stack" hidden>
+        <button class="btn primary full" id="verify-btn">Send verification email</button>
+        <button class="btn full" id="verified-btn">I've verified — continue</button>
+      </div>
+      <p class="error" id="login-error"></p>
+      <button class="link small" id="login-signout">Sign out / use another account</button>
+    </div>
+  </div>
+
+  <div id="admin" hidden>
+    <header class="topbar">
+      <div class="logo"><span class="dot"></span>StoreRadar <span class="badge">Admin</span></div>
+      <div class="spacer"></div>
+      <span class="muted small" id="me"></span>
+      <a class="btn sm ghost" href="/">Open app</a>
+      <button class="btn sm ghost" id="signout">Sign out</button>
+    </header>
+
+    <main class="admin-main">
+      <section class="kpis" id="kpis"></section>
+
+      <nav class="tabs admin-tabs">
+        <button class="tab active" data-tab="orgs">Workspaces</button>
+        <button class="tab" data-tab="users">Users</button>
+      </nav>
+
+      <section id="tab-orgs">
+        <div class="row gap wrap toolbar">
+          <input class="search" id="org-q" placeholder="Search name, owner, phone, industry…" />
+          <select id="org-status-filter" style="width:auto"><option value="">All statuses</option><option>active</option><option>hold</option><option>blocked</option></select>
+          <button class="btn sm" id="refresh">Refresh</button>
+          <button class="btn sm ghost" id="export-orgs">Export CSV</button>
+        </div>
+        <div id="orgs"></div>
+      </section>
+
+      <section id="tab-users" hidden>
+        <div class="row gap wrap toolbar">
+          <input class="search" id="user-q" placeholder="Search email, name, workspace…" />
+          <button class="btn sm" id="refresh-users">Refresh</button>
+        </div>
+        <div class="table-wrap"><table id="users" class="admin-table"></table></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="dlg"><form method="dialog" class="stack" id="dlg-form"></form></dialog>
+  <div id="toast" role="status"></div>
+</body>
+</html>

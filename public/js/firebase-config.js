@@ -9,6 +9,11 @@ export const firebaseConfig = {
   appId: "1:568631883956:web:e0761d49b58691784dffe1",
 };
 
+// Server API for Google Places search + population proxy:
+//   "/api"  → Vercel API routes in /api (no Firebase Blaze plan needed)
+//   ""      → Firebase Cloud Functions in /functions (needs Blaze)
+export const apiBase = "/api";
+
 // Cloud Functions region (functions/index.js နဲ့ တူရမယ်)
 export const functionsRegion = "asia-southeast1";
 

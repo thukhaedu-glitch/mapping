@@ -8,8 +8,11 @@ service cloud.firestore {
     function memberDoc(org) { return /databases/$(database)/documents/orgs/$(org)/members/$(request.auth.uid); }
     function isMember(org) { return signedIn() && exists(memberDoc(org)); }
     function role(org) { return get(memberDoc(org)).data.role; }
-    function canEdit(org) { return isMember(org) && role(org) in ['owner', 'admin', 'editor']; }
-    function isAdmin(org) { return isMember(org) && role(org) in ['owner', 'admin']; }
+    // Workspace status is set only by the platform admin (Admin SDK): active | hold (read-only) | blocked (no access)
+    function status(org) { return get(/databases/$(database)/documents/orgs/$(org)).data.get('status', 'active'); }
+    function canRead(org) { return isMember(org) && status(org) != 'blocked'; }
+    function canEdit(org) { return isMember(org) && role(org) in ['owner', 'admin', 'editor'] && status(org) == 'active'; }
+    function isAdmin(org) { return isMember(org) && role(org) in ['owner', 'admin'] && status(org) == 'active'; }
     function myEmail() { return request.auth.token.email.lower(); }
 
     // User profile: which org they belong to
@@ -27,13 +30,14 @@ service cloud.firestore {
     }
 
     match /orgs/{orgId} {
-      allow read: if isMember(orgId);
+      allow read: if canRead(orgId);
       allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid
-        && request.resource.data.plan == 'free';                 // plan is changed only by billing backend (Admin SDK)
-      allow update: if isAdmin(orgId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']);
+        && request.resource.data.plan == 'free'                  // plan/status are changed only by the platform admin (Admin SDK)
+        && request.resource.data.get('status', 'active') == 'active';
+      allow update: if isAdmin(orgId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'profile']);
 
       match /members/{uid} {
-        allow read: if isMember(orgId);
+        allow read: if canRead(orgId);
         allow create: if signedIn() && request.auth.uid == uid && (
             // bootstrap: creator of the org becomes owner
             (get(/databases/$(database)/documents/orgs/$(orgId)).data.ownerUid == uid && request.resource.data.role == 'owner')
@@ -46,7 +50,7 @@ service cloud.firestore {
       }
 
       match /brands/{id} {
-        allow read: if isMember(orgId);
+        allow read: if canRead(orgId);
         allow create, update: if canEdit(orgId) && request.resource.data.name is string && request.resource.data.name.size() <= 80
           // logo = small data URL (resized in the browser); keeps brand docs far below Firestore's 1 MB limit
           && (!('logo' in request.resource.data) || request.resource.data.logo == null
@@ -55,7 +59,7 @@ service cloud.firestore {
       }
 
       match /stores/{id} {
-        allow read: if isMember(orgId);
+        allow read: if canRead(orgId);
         allow create, update: if canEdit(orgId)
           && request.resource.data.lat is number && request.resource.data.lng is number
           && request.resource.data.lat >= -90 && request.resource.data.lat <= 90
@@ -63,9 +67,19 @@ service cloud.firestore {
         allow delete: if canEdit(orgId);
       }
 
-      // Written only by Cloud Functions (Admin SDK) — usage metering for billing/quotas
+      // AI provider/model (visible to members) and the AI key (write-only: never readable from any browser)
+      match /settings/{id} {
+        allow read: if canRead(orgId);
+        allow write: if isAdmin(orgId);
+      }
+      match /secrets/{id} {
+        allow read: if false;
+        allow write: if isAdmin(orgId) && request.resource.data.key is string && request.resource.data.key.size() < 400;
+      }
+
+      // Written only by the server (Admin SDK) — usage metering for billing/quotas
       match /usage/{month} {
-        allow read: if isMember(orgId);
+        allow read: if canRead(orgId);
         allow write: if false;
       }
     }

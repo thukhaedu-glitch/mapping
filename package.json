@@ -1,0 +1,7 @@
+{
+  "name": "storeradar",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "dependencies": { "firebase-admin": "^12.6.0" }
+}

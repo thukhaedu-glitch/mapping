@@ -4,6 +4,13 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>StoreRadar — Competitor Map</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23fecdd3'/%3E%3Ccircle cx='16' cy='16' r='8' fill='%23e11d48'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://www.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
+  <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
+  <link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js" />
+  <link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js" />
+  <link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+Myanmar:wght@400;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -13,6 +20,9 @@
   <script type="module" src="js/app.js"></script>
 </head>
 <body>
+  <div id="blocked" class="overlay" hidden><div class="auth-card"><div class="logo"><span class="dot"></span>StoreRadar</div><h3>Workspace blocked</h3><p class="muted">Access to this workspace has been suspended. Please contact your StoreRadar account manager.</p><button class="btn" id="blocked-signout">Sign out</button></div></div>
+  <div id="boot" class="overlay"><div class="boot"><div class="logo"><span class="dot"></span>StoreRadar</div><div class="spinner"></div><p class="muted small" id="boot-msg">Loading…</p></div></div>
+
   <!-- ============ AUTH / ONBOARDING (Firebase mode) ============ -->
   <div id="auth" class="overlay" hidden>
     <div class="auth-card">
@@ -32,9 +42,27 @@
       </form>
 
       <form id="org-form" hidden>
-        <h3>Create your workspace</h3>
-        <p class="muted">A workspace is one company. Invite teammates later.</p>
-        <label>Company name<input name="org" required placeholder="e.g. The Pizza Company Myanmar" /></label>
+        <h3>Tell us about your business</h3>
+        <p class="muted small">This sets up your workspace. You can invite teammates later.</p>
+        <label>Company / brand name *<input name="org" required maxlength="80" placeholder="e.g. The Pizza Company Myanmar" /></label>
+        <div class="grid2">
+          <label>Business type *
+            <select name="industry" required>
+              <option value="">Choose…</option><option>Restaurant / QSR</option><option>Café / bakery</option><option>Retail shop</option>
+              <option>Supermarket / convenience</option><option>Pharmacy / health</option><option>Beauty / cosmetics</option>
+              <option>Bank / finance branch</option><option>Telecom / mobile shop</option><option>Education</option><option>Other</option>
+            </select></label>
+          <label>Number of branches *<input name="branches" type="number" min="0" max="100000" required placeholder="e.g. 12" /></label>
+          <label>Contact person *<input name="contactName" required maxlength="80" autocomplete="name" /></label>
+          <label>Phone / Viber *<input name="phone" required maxlength="30" type="tel" autocomplete="tel" placeholder="+95 9…" /></label>
+          <label>Your role<input name="jobTitle" maxlength="60" placeholder="e.g. Marketing Manager" /></label>
+          <label>Country *<select name="country" required><option>Myanmar</option><option>Thailand</option><option>Cambodia</option><option>Laos</option><option>Vietnam</option><option>UAE</option><option>Other</option></select></label>
+        </div>
+        <label>Main cities (comma-separated)<input name="cities" maxlength="200" placeholder="Yangon, Mandalay" /></label>
+        <label>Website or Facebook page<input name="website" maxlength="200" placeholder="https://facebook.com/…" /></label>
+        <label>Main competitors (comma-separated)<input name="competitors" maxlength="300" placeholder="e.g. Pizza Hut, Domino's" /></label>
+        <label>What do you want to use StoreRadar for?
+          <select name="goal"><option>Competitor mapping</option><option>Finding new branch locations</option><option>Trade-area reports for management</option><option>Sales territory planning</option><option>Other</option></select></label>
         <button class="btn primary full" type="submit">Create workspace</button>
         <p class="error" id="org-error"></p>
       </form>
@@ -50,6 +78,7 @@
 
   <!-- ============ APP ============ -->
   <div id="app">
+    <div class="status-banner" id="status-banner" hidden></div>
     <header class="topbar">
       <div class="logo"><span class="dot"></span>StoreRadar</div>
       <div class="org" id="org-name"></div>
@@ -94,6 +123,17 @@
           </form>
           <p class="error" id="find-error"></p>
           <div id="find-results"></div>
+
+          <h4 class="mt">✨ AI: find branches on the web</h4>
+          <p class="muted small">Your AI searches the brand's website, Facebook page and delivery apps for its branch list. Addresses come with sources; coordinates are often missing — paste a Google Maps link to place those. Everything is added as <b>pending</b>.</p>
+          <form id="ai-find-form" class="stack">
+            <input name="brand" required list="brand-names" placeholder="Brand, e.g. Pizza Hut" />
+            <input name="area" value="Yangon, Myanmar" placeholder="Area" />
+            <button class="btn primary">Search with AI</button>
+          </form>
+          <datalist id="brand-names"></datalist>
+          <p class="error" id="ai-find-error"></p>
+          <div id="ai-find-results"></div>
         </section>
 
         <!-- ANALYSIS -->
@@ -121,6 +161,20 @@
             <input name="name" required placeholder="New brand name" />
             <input name="color" type="color" value="#dc2626" title="Pin colour" />
             <button class="btn sm primary">Add</button>
+          </form>
+
+          <h4 class="mt">AI (use your own key)</h4>
+          <p class="muted small">Connect Claude, ChatGPT or Gemini with your own API key. The key is stored on the server and can't be read back from any browser — you pay your AI provider directly.</p>
+          <div id="ai-view" class="muted small"></div>
+          <form id="ai-form" class="stack">
+            <div class="grid2">
+              <label>Provider<select name="provider"></select></label>
+              <label>Model<input name="model" list="ai-models" /></label>
+            </div>
+            <datalist id="ai-models"></datalist>
+            <label>API key <span id="ai-key-link"></span><input name="key" type="password" autocomplete="off" placeholder="Paste key (leave blank to keep the saved one)" /></label>
+            <div class="row gap"><button class="btn sm primary">Save</button><button class="btn sm" type="button" id="ai-test">Test connection</button></div>
+            <p class="small" id="ai-msg"></p>
           </form>
 
           <h4 class="mt">Team</h4>

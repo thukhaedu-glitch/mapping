@@ -1,0 +1,33 @@
+.admin-main { padding: 16px; display: flex; flex-direction: column; gap: 14px; max-width: 1400px; margin: 0 auto; width: 100%; }
+#admin { min-height: 100%; display: flex; flex-direction: column; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.kpi b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+.kpi span { font-size: 12px; color: var(--muted); }
+.admin-tabs { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; max-width: 360px; }
+.toolbar .search { flex: 1; min-width: 200px; }
+
+.org { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 10px; }
+.org.st-hold { border-left: 4px solid #d97706; } .org.st-blocked { border-left: 4px solid var(--danger); opacity: .85; }
+.org-head { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.org-head .main { flex: 1; min-width: 220px; }
+.org-head h3 { margin: 0; font-size: 16px; }
+.org-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--muted); }
+.org-meta b { color: var(--text); font-weight: 600; }
+.org-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.org-actions select { width: auto; padding: 5px 8px; font-size: 12.5px; }
+.st { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 99px; text-transform: uppercase; letter-spacing: .03em; }
+.st.active { background: #dcfce7; color: #166534; } .st.hold { background: #fef3c7; color: #92400e; } .st.blocked { background: #fee2e2; color: #991b1b; }
+.btn.warn { color: #b45309; border-color: #fcd34d; } .btn.ok { color: #15803d; border-color: #86efac; }
+.org details { font-size: 13px; } .org summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+.profile-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 20px; margin-top: 8px; }
+.profile-grid div { display: flex; gap: 8px; } .profile-grid dt { color: var(--muted); min-width: 110px; } .profile-grid dd { margin: 0; word-break: break-word; }
+.members { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+.admin-table th, .admin-table td { text-align: left; }
+.admin-table td:first-child, .admin-table th:first-child { position: static; }
+.admin-table tr:hover td { cursor: default; }
+.admin-table .acts { display: flex; gap: 4px; flex-wrap: wrap; }
+.admin-table .btn { padding: 3px 8px; font-size: 12px; }
+.linkbox { font-family: ui-monospace, monospace; font-size: 11.5px; word-break: break-all; background: var(--surface-2); padding: 8px; border-radius: 6px; }
+@media (max-width: 700px) { .admin-table { font-size: 12px; } }

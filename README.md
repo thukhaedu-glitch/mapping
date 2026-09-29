@@ -16,6 +16,8 @@ Company တစ်ခုချင်းစီက ကိုယ့် workspace န
 | အကွာအဝေး တိုင်းတာ | ဆိုင် detail → **Nearest stores** ထဲက row ကိုနှိပ် → map ပေါ်မှာ မျဉ်းဆွဲပြီး မျဉ်းဖြောင့်အကွာအဝေး + လမ်းအကွာအဝေး + ကားချိန် ပြ။ Map ပေါ်က **📏 Measure** နဲ့ ဆိုင် ၂ ဆိုင် (ဒါမှမဟုတ် နေရာ ၂ ခု) ကိုနှိပ်။ Road distance က OSRM (OpenStreetMap roads, traffic မပါ) |
 | Export map | **⤓ Export map** — JPG 3000px / 6000px, PDF A3 (map + analysis table) |
 | Brand logo | Brands & Team → **+ Logo** (PNG/JPG/SVG/WebP)။ 128px အထိ ချုံ့ပြီး Firestore ထဲသိမ်း (~3–15KB) → Firebase Storage/Blaze မလို။ Map pin၊ list၊ legend၊ JPG/PDF export မှာ ပေါ်တယ်။ Map ပေါ်က **Logos** toggle နဲ့ ပိတ်/ဖွင့် |
+| AI (own key) | Brands & Team → **AI** — workspace admin က Claude / ChatGPT / Gemini key ထည့် (key ကို server မှာပဲ သိမ်း၊ browser ကနေ ပြန်ဖတ်လို့မရ)။ **✨ AI insight** (ဆိုင် detail, မြန်မာ/English) နဲ့ **✨ AI: find branches** (Find tab, web search + source link) |
+| Onboarding | Workspace ဖန်တီးတဲ့အခါ လုပ်ငန်းအမျိုးအစား၊ ဆိုင်ခွဲအရေအတွက်၊ contact၊ ဖုန်း၊ မြို့၊ website/FB၊ ပြိုင်ဘက်၊ ရည်ရွယ်ချက် တောင်းတယ် |
 | Team | Owner / Admin / Editor / Viewer roles, email invite |
 
 ## ၁။ Demo နဲ့ စမ်းကြည့်ရန် (Firebase မလို)
@@ -43,7 +45,22 @@ npm i -g firebase-tools && firebase login
 firebase deploy --only hosting,firestore        # Spark (free) plan နဲ့ ရတယ်
 ```
 
-### Google Places search (optional — Cloud Functions လိုတယ်)
+### Vercel နဲ့ Deploy (Firebase Blaze မလို)
+Repo root ကို Vercel project ချိတ် (Root Directory = `./`)။ `vercel.json` က `public/` ကို website အဖြစ်၊ `api/` ကို server function အဖြစ် deploy လုပ်တယ်။
+Vercel → Settings → Environment Variables:
+- `FIREBASE_SERVICE_ACCOUNT` — Firebase Console → Project settings → Service accounts → Generate new private key → JSON file ထဲက စာအကုန်
+- `PLACES_API_KEY` — Google Cloud Console → Places API (New) enable → API key (API restriction: Places API (New))
+Firestore rules ကိုတော့ Firebase Console → Firestore → Rules မှာ paste/Publish လုပ်ရတယ် (Vercel က မတင်ပေးဘူး)။
+⚠️ Vercel Hobby (free) plan က non-commercial အတွက်ပဲ — SaaS ရောင်းရင် Pro plan လိုတယ်။
+
+### Platform admin (`/admin.html`) — မင်းတစ်ယောက်တည်း
+Vercel env var `SUPER_ADMIN_EMAILS` = မင်း email (comma နဲ့ ခွဲပြီး အများထည့်လို့ရ)။ Google နဲ့ sign in ဝင်ပါ (email verified ဖြစ်ရမယ်)။
+- Workspace: Active / Hold (read-only) / Block (ဝင်လို့မရ) / Delete, plan ပြောင်း, လုပ်ငန်း details, CSV export
+- User: reset link ထုတ် (Viber နဲ့ပို့), reset email ပို့, password အသစ်သတ်မှတ်, disable/enable, delete
+- လုပ်ဆောင်ချက်တိုင်း `adminLog` collection ထဲ မှတ်တယ်
+
+### Google Places search (Firebase Cloud Functions နဲ့ — Vercel မသုံးရင်)
+`public/js/firebase-config.js` မှာ `apiBase = ""` ပြောင်းပါ။
 Cloud Functions သုံးဖို့ **Blaze plan** (card ချိတ်) လိုတယ်။ Free quota အတွင်းဆို ပိုက်ဆံမကျဘူး၊ ဒါပေမဲ့ Google Cloud မှာ **budget alert** ထားပါ။
 ```bash
 # Google Cloud Console → enable "Places API (New)" → API key ဖန်တီး (API restriction: Places API only)

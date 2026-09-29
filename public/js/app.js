@@ -1,6 +1,7 @@
 import { createBackend, hasFirebase } from "./data.js";
 import { distance, fmtDist, fmtNum, neighbours, radiusSummary, loadPopGrid, popGridInfo, populationWithin, poiCounts, POI_GROUPS, matchBrand, worldpopDirect, WORLDPOP_YEAR, roadRoute, fmtDur } from "./analysis.js";
 import { TILES } from "./tiles.js";
+import { PROVIDERS } from "./ai-core.js";
 import { renderMapCanvas, renderTableCanvas, exportJPG, exportPDF } from "./export.js";
 import { parseFile, exportStores, exportAnalysis, downloadTemplate, coordsFromLink } from "./excel.js";
 
@@ -37,24 +38,56 @@ async function logoToDataURL(file) {
   } finally { URL.revokeObjectURL(url); }
 }
 
-const canEdit = () => ["owner", "admin", "editor"].includes(S.api.org?.role);
-const isAdmin = () => ["owner", "admin"].includes(S.api.org?.role);
+const active = () => (S.api.org?.status || "active") === "active";
+const canEdit = () => active() && ["owner", "admin", "editor"].includes(S.api.org?.role);
+const isAdmin = () => active() && ["owner", "admin"].includes(S.api.org?.role);
 const MYANMAR_CENTER = [16.8409, 96.1735]; // Yangon
 
 /* =========================================================== BOOT */
-window.addEventListener("load", async () => {
-  S.api = await createBackend();
-  if (!hasFirebase) return startApp();
+// ES modules run after the HTML is parsed, so no need to wait for "load" (fonts, images, tiles).
+(async () => {
+  try { S.api = await createBackend(); }
+  catch (x) {
+    console.error(x);
+    $("#boot .spinner").hidden = true;
+    return setBoot("Could not reach Firebase. Check your internet connection (or VPN / firewall blocking gstatic.com) and reload.");
+  }
+  if (!hasFirebase) { hideBoot(); return startApp(); }
   $("#app").hidden = true;
+  wireAuth();
   S.api.onAuth(async user => {
-    if (!user) return showAuth("login");
+    if (!user) { hideBoot(); return showAuth("login"); }
+    // Returning user: open the workspace straight from cache, verify membership in the background.
+    const cached = S.api.cachedOrg();
+    if (cached) {
+      S.api.org = cached; hideBoot(); startApp();
+      S.api.resolveOrg().then(r => { if (!r.org || r.org.id !== cached.id || r.org.role !== cached.role || (r.org.status || "active") !== (cached.status || "active")) location.reload(); }).catch(() => {});
+      return;
+    }
+    setBoot("Opening your workspace…");
     const r = await S.api.resolveOrg().catch(e => ({ error: e }));
+    hideBoot();
     if (r.org) return startApp();
+    if (r.blocked) return showBlocked();
     if (r.invite) return showAuth("invite", r.invite);
+    if (r.error) $("#org-error").textContent = r.error.message;
     showAuth("org");
   });
-  wireAuth();
-});
+})();
+
+function showBlocked() {
+  hideBoot(); $("#auth").hidden = true; $("#app").hidden = true; $("#blocked").hidden = false;
+  $("#blocked-signout").onclick = () => { S.api.forgetOrg?.(); S.api.signOut().then(() => location.reload()); };
+}
+function setBoot(msg) { $("#boot").hidden = false; $("#boot-msg").textContent = msg; }
+function hideBoot() { $("#boot").hidden = true; }
+
+/** Disable a button and show progress text while an async action runs. */
+async function busy(btn, text, fn) {
+  const old = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = text; }
+  try { return await fn(); } finally { if (btn) { btn.disabled = false; btn.textContent = old; } }
+}
 
 function showAuth(step, invite) {
   $("#auth").hidden = false; $("#app").hidden = true;
@@ -85,8 +118,10 @@ function wireAuth() {
     e.preventDefault();
     const f = new FormData(e.target), act = e.submitter?.dataset.act;
     err("");
-    try { act === "signup" ? await S.api.signUp(f.get("email"), f.get("password")) : await S.api.signIn(f.get("email"), f.get("password")); }
-    catch (x) { err(authMsg(x)); }
+    try {
+      await busy(e.submitter, act === "signup" ? "Creating account…" : "Signing in…", () =>
+        act === "signup" ? S.api.signUp(f.get("email"), f.get("password")) : S.api.signIn(f.get("email"), f.get("password")));
+    } catch (x) { err(authMsg(x)); }
   });
   $("#google-btn").onclick = () => S.api.signInGoogle().catch(x => err(authMsg(x)));
   $("#reset-btn").onclick = async () => {
@@ -96,10 +131,18 @@ function wireAuth() {
   };
   $("#org-form").addEventListener("submit", async e => {
     e.preventDefault();
-    try { const r = await S.api.createOrg(e.target.org.value.trim()); if (r.org) startApp(); }
-    catch (x) { $("#org-error").textContent = x.message; }
+    $("#org-error").textContent = "";
+    const f = Object.fromEntries(new FormData(e.target));
+    const list = v => String(v || "").split(",").map(x => x.trim()).filter(Boolean).slice(0, 20);
+    const profile = {
+      industry: f.industry, branches: +f.branches || 0, contactName: f.contactName.trim(), phone: f.phone.trim(),
+      jobTitle: (f.jobTitle || "").trim(), country: f.country, cities: list(f.cities), website: (f.website || "").trim(),
+      competitors: list(f.competitors), goal: f.goal,
+    };
+    try { const r = await busy(e.submitter || e.target.querySelector("button"), "Creating workspace…", () => S.api.createOrg(f.org.trim(), profile)); if (r.org) startApp(); }
+    catch (x) { $("#org-error").textContent = x.code === "permission-denied" ? "Permission denied — publish firestore.rules in Firebase Console → Firestore → Rules." : x.message; }
   });
-  $("#accept-invite").onclick = async () => { const r = await S.api.acceptInvite(S.pendingInvite); if (r.org) startApp(); };
+  $("#accept-invite").onclick = async e => { const r = await busy(e.target, "Joining…", () => S.api.acceptInvite(S.pendingInvite)); if (r.org) startApp(); };
   $("#decline-invite").onclick = () => showAuth("org");
 }
 
@@ -112,7 +155,8 @@ function startApp() {
   badge.textContent = S.api.mode === "demo" ? "DEMO · data stays in this browser" : S.api.org.role;
   badge.classList.toggle("demo", S.api.mode === "demo");
   $("#signout-btn").hidden = S.api.mode === "demo";
-  $("#signout-btn").onclick = () => S.api.signOut().then(() => location.reload());
+  if (S.api.org.status === "hold") { $("#status-banner").hidden = false; $("#status-banner").textContent = "This workspace is on hold — read-only. Contact your StoreRadar account manager to reactivate it."; }
+  $("#signout-btn").onclick = () => { S.api.forgetOrg?.(); S.api.signOut().then(() => location.reload()); };
   if (started) return;
   started = true;
 
@@ -127,6 +171,7 @@ function applyRole() {
   document.querySelectorAll("#add-store-btn, label:has(#import-file), #brand-form, #clear-btn, #sample-btn, #find-form button, #store-delete")
     .forEach(el => (el.hidden = !canEdit()));
   $("#invite-form").hidden = !isAdmin();
+  $("#ai-find-form").hidden = !canEdit();
   $("#sample-btn").hidden = !canEdit() || S.api.mode !== "demo";
 }
 
@@ -179,6 +224,7 @@ function visibleStores() {
 function renderAll() { renderFilter(); renderStoreList(); renderMarkers(); renderDetail(); renderBrands(); renderAnalysis(); }
 
 function renderFilter() {
+  $("#brand-names").innerHTML = S.brands.map(b => `<option value="${esc(b.name)}">`).join("");
   const counts = {};
   S.stores.forEach(s => (counts[s.brandId] = (counts[s.brandId] || 0) + 1));
   $("#brand-filter").innerHTML = S.brands.map(b =>
@@ -263,6 +309,12 @@ function renderDetail() {
     <div id="poi-box"><h4>Area activity (OpenStreetMap)</h4>
       <p class="muted small">Proxy for daytime foot traffic &amp; jobs — offices, schools, hospitals, malls. OSM coverage in Myanmar is uneven; compare stores against each other rather than reading absolute numbers.</p>
       <button class="btn sm" id="d-poi">Load area data for ${fmtDist(S.radius)}</button>
+    </div>
+
+    <div id="ai-box"><h4>✨ AI insight</h4>
+      <div class="row gap"><select id="ai-lang" style="width:auto"><option value="my">မြန်မာ</option><option value="en">English</option></select>
+      <button class="btn sm" id="d-ai">Analyse this store</button></div>
+      <div id="ai-insight"></div>
     </div>`;
 
   $("#d-close").onclick = () => { S.selectedId = null; renderAll(); };
@@ -275,10 +327,12 @@ function renderDetail() {
     const other = S.stores.find(x => x.id === n.dataset.id);
     if (other) addMeasure(s, other, true);
   }));
+  $("#d-ai").onclick = e => runInsight(s, nb, sum, pop, e.target);
   $("#d-poi").onclick = async e => {
     e.target.disabled = true; e.target.textContent = "Loading…";
     try {
       const c = await poiCounts(s, S.radius);
+      S.lastPoi = { id: s.id, radius: S.radius, counts: c };
       $("#poi-box").querySelector("button").outerHTML = `<dl class="kv">${POI_GROUPS.map(([k, label]) => `<dt>${label}</dt><dd>${fmtNum(c[k])}</dd>`).join("")}</dl>`;
     } catch (x) { e.target.disabled = false; e.target.textContent = "Retry"; toast(x.message, 4000); }
   };
@@ -418,7 +472,7 @@ function wireUI() {
   document.querySelectorAll(".tab").forEach(t => (t.onclick = () => {
     document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === t));
     document.querySelectorAll(".tabpane").forEach(p => (p.hidden = p.id !== "tab-" + t.dataset.tab));
-    if (t.dataset.tab === "settings") renderMembers();
+    if (t.dataset.tab === "settings") { renderMembers(); renderAISettings(); }
   }));
 
   $("#brand-filter").onclick = e => { const c = e.target.closest(".chip"); if (!c) return;
@@ -525,6 +579,7 @@ function wireUI() {
     } catch (x) { $("#find-error").textContent = x.message; }
     finally { btn.disabled = false; btn.textContent = "Search"; } };
 
+  wireAI();
   document.addEventListener("keydown", e => { if (e.key === "Escape") { if (S.placing) stopPlacing(); if (S.measure.on) toggleMeasure(false); $("#export-menu").hidden = true; } });
   $("#measure-btn").onclick = () => toggleMeasure(!S.measure.on);
   $("#measure-clear").onclick = clearMeasures;
@@ -535,6 +590,117 @@ function wireUI() {
   $("#export-map-btn").onclick = e => { e.stopPropagation(); $("#export-menu").hidden = !$("#export-menu").hidden; };
   document.addEventListener("click", e => { if (!e.target.closest(".map-export")) $("#export-menu").hidden = true; });
   $("#export-menu").onclick = e => { const b = e.target.closest("button[data-fmt]"); if (b) exportMap(b.dataset.fmt, +b.dataset.size); };
+}
+
+/* =========================================================== AI (bring your own key) */
+async function renderAISettings() {
+  const f = $("#ai-form");
+  f.provider.innerHTML = Object.entries(PROVIDERS).map(([k, p]) => `<option value="${k}">${p.label}</option>`).join("");
+  let cfg = {};
+  try { cfg = await S.api.getAISettings(); } catch {}
+  const setModels = () => {
+    const p = PROVIDERS[f.provider.value];
+    $("#ai-models").innerHTML = p.models.map(m => `<option value="${m}">`).join("");
+    $("#ai-key-link").innerHTML = `· <a href="${p.keyUrl}" target="_blank" rel="noopener">get a key</a>`;
+  };
+  f.provider.value = cfg.provider || "claude"; setModels();
+  f.model.value = cfg.model || PROVIDERS[f.provider.value].models[0];
+  f.key.value = "";
+  f.key.placeholder = cfg.keyHint ? `Saved key ${cfg.keyHint} — paste a new one to replace` : "Paste your API key";
+  f.provider.onchange = () => { setModels(); f.model.value = PROVIDERS[f.provider.value].models[0]; };
+  $("#ai-view").textContent = cfg.provider ? `Connected: ${PROVIDERS[cfg.provider]?.label} · ${cfg.model}${cfg.keyHint ? " · key " + cfg.keyHint : ""}` : "No AI connected yet.";
+  f.hidden = !isAdmin() && S.api.mode !== "demo";
+}
+
+function wireAI() {
+  const f = $("#ai-form"), msg = t => ($("#ai-msg").textContent = t);
+  f.onsubmit = async e => {
+    e.preventDefault(); msg("");
+    try {
+      await busy(e.submitter, "Saving…", () => S.api.saveAISettings({ provider: f.provider.value, model: f.model.value.trim(), key: f.key.value.trim() }));
+      msg("Saved. Click Test connection to check it."); renderAISettings();
+    } catch (x) { msg(x.message); }
+  };
+  $("#ai-test").onclick = async e => {
+    msg("");
+    try { const r = await busy(e.target, "Testing…", () => S.api.ai("test")); msg(`✔ Working — model replied "${r.reply}"`); }
+    catch (x) { msg("✖ " + x.message); }
+  };
+
+  $("#ai-find-form").onsubmit = async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    $("#ai-find-error").textContent = ""; $("#ai-find-results").innerHTML = "";
+    try {
+      const r = await busy(e.submitter, "AI is searching (≈30–90 s)…", () => S.api.ai("branches", { brand: fd.get("brand"), area: fd.get("area") }));
+      S.aiBrand = fd.get("brand").trim();
+      S.aiFound = (r.items || []).filter(i => i && (i.name || i.address)).map(i => {
+        let lat = +i.lat, lng = +i.lng;
+        if (!(isFinite(lat) && isFinite(lng) && lat && lng)) { const c = coordsFromLink(i.mapsUrl); lat = c?.lat; lng = c?.lng; }
+        const has = isFinite(lat) && isFinite(lng);
+        return { ...i, lat: has ? lat : null, lng: has ? lng : null, pick: has, dup: has && S.stores.some(s => distance(s, { lat, lng }) < 40) };
+      });
+      S.aiSources = r.sources || [];
+      renderAIFind();
+    } catch (x) { $("#ai-find-error").textContent = x.message; }
+  };
+}
+
+function renderAIFind() {
+  const box = $("#ai-find-results"), list = S.aiFound || [];
+  if (!list.length) { box.innerHTML = '<p class="muted small">The AI found no branches with a source. Try a different spelling or area.</p>'; return; }
+  const existing = S.brands.find(b => [b.name, ...(b.aliases || [])].some(n => n.toLowerCase() === S.aiBrand.toLowerCase()));
+  const placed = list.filter(i => i.lat != null).length;
+  box.innerHTML = `<div class="row between small"><span>${list.length} found · ${placed} with location</span>
+      <button class="btn sm primary" id="ai-add">Add ticked as pending</button></div>
+    <p class="small muted">Brand: <b>${esc(existing?.name || S.aiBrand)}</b>${existing ? "" : " (will be created)"}. AI results can be wrong — verify each one.</p>` +
+    list.map((i, k) => `<div class="result ${i.dup ? "dup" : ""}">
+      <input type="checkbox" data-k="${k}" ${i.pick && !i.dup ? "checked" : ""} ${i.lat == null || i.dup ? "disabled" : ""} />
+      <div class="main"><b>${esc(i.name || "(no name)")}</b>${i.status && i.status !== "open" ? ` <span class="pill">${esc(i.status)}</span>` : ""}
+        <div class="muted small">${esc([i.address, i.township, i.city].filter(Boolean).join(", "))}</div>
+        ${i.dup ? '<div class="small muted">Already on map</div>' : i.lat == null ? `<input class="maps" data-maps="${k}" placeholder="Paste Google Maps link to place it" />` : `<div class="small muted">📍 ${i.lat.toFixed(5)}, ${i.lng.toFixed(5)}</div>`}
+        ${i.source ? `<a class="src" href="${esc(i.source)}" target="_blank" rel="noopener">source</a>` : ""}
+      </div></div>`).join("") +
+    (S.aiSources?.length ? `<div class="ai-src"><b class="muted">Searched:</b>${S.aiSources.map(x => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>`).join("")}</div>` : "");
+  box.querySelectorAll("[data-maps]").forEach(inp => (inp.oninput = () => {
+    const c = coordsFromLink(inp.value); if (!c) return;
+    Object.assign(list[+inp.dataset.maps], { lat: c.lat, lng: c.lng, pick: true }); renderAIFind();
+  }));
+  box.querySelectorAll("input[type=checkbox]").forEach(cb => (cb.onchange = () => (list[+cb.dataset.k].pick = cb.checked)));
+  $("#ai-add").onclick = async e => {
+    const add = list.filter(i => i.pick && !i.dup && i.lat != null);
+    if (!add.length) return toast("Tick at least one branch that has a location.");
+    await busy(e.target, "Adding…", async () => {
+      const brandId = existing?.id || await S.api.add("brands", { name: S.aiBrand, color: randomColor(), isOwn: false, aliases: [] });
+      await S.api.bulkAdd("stores", add.map(i => ({
+        brandId, name: i.name || `${S.aiBrand} ${i.township || ""}`.trim(), lat: i.lat, lng: i.lng, address: i.address || "",
+        township: i.township || "", city: i.city || "", status: "pending", source: "ai", notes: i.source ? `AI source: ${i.source}` : "AI",
+        sizeSqft: null, seats: null, type: "",
+      })));
+    });
+    toast(`Added ${add.length} branches as pending.`); S.aiFound = []; renderAIFind(); $("#ai-find-results").innerHTML = "";
+  };
+}
+
+async function runInsight(s, nb, sum, pop, btn) {
+  const out = $("#ai-insight");
+  const bName = id => S.brandsById[id]?.name || "?";
+  const stats = {
+    store: { name: s.name, brand: bName(s.brandId), ours: !!S.brandsById[s.brandId]?.isOwn, township: s.township, city: s.city, sizeSqft: s.sizeSqft, seats: s.seats, type: s.type },
+    radiusMeters: S.radius,
+    competitorsInRadius: sum.competitors, competitorsByBrand: Object.fromEntries(Object.entries(sum.byBrand).map(([k, v]) => [bName(k), v])),
+    competitorSqftInRadius: sum.competitorSqft || null, ownOtherStoresInRadius: sum.ownOthers,
+    nearest: nb.slice(0, 6).map(n => ({ brand: bName(n.store.brandId), name: n.store.name, meters: Math.round(n.d), sizeSqft: n.store.sizeSqft || null, ours: n.own })),
+    populationInRadius: pop == null ? null : Math.round(pop),
+    populationPerStoreInRadius: pop == null ? null : Math.round(pop / (sum.competitors + sum.ownOthers + 1)),
+    areaActivityOSM: S.lastPoi?.id === s.id && S.lastPoi.radius === S.radius ? S.lastPoi.counts : null,
+  };
+  out.innerHTML = "";
+  try {
+    const r = await busy(btn, "Thinking…", () => S.api.ai("insight", { stats, lang: $("#ai-lang").value }));
+    out.innerHTML = `<div class="ai-out">${esc(r.text)}</div><div class="row gap" style="margin-top:6px"><button class="btn sm ghost" id="ai-copy">Copy</button></div>`;
+    $("#ai-copy").onclick = () => navigator.clipboard.writeText(r.text).then(() => toast("Copied"));
+  } catch (x) { out.innerHTML = `<p class="error">${esc(x.message)}</p>`; }
 }
 
 /* =========================================================== POPULATION (auto) */
