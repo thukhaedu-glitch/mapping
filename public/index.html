@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>StoreRadar — Competitor Map</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+Myanmar:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="css/app.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" defer></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <!-- ============ AUTH / ONBOARDING (Firebase mode) ============ -->
+  <div id="auth" class="overlay" hidden>
+    <div class="auth-card">
+      <div class="logo"><span class="dot"></span>StoreRadar</div>
+      <p class="muted">Competitor &amp; trade-area mapping for retail chains</p>
+
+      <form id="login-form">
+        <label>Email<input type="email" name="email" required autocomplete="email" /></label>
+        <label>Password<input type="password" name="password" required minlength="6" autocomplete="current-password" /></label>
+        <div class="row gap">
+          <button class="btn primary" type="submit" data-act="signin">Sign in</button>
+          <button class="btn" type="submit" data-act="signup">Create account</button>
+        </div>
+        <button class="btn ghost full" type="button" id="google-btn">Continue with Google</button>
+        <button class="link" type="button" id="reset-btn">Forgot password?</button>
+        <p class="error" id="auth-error"></p>
+      </form>
+
+      <form id="org-form" hidden>
+        <h3>Create your workspace</h3>
+        <p class="muted">A workspace is one company. Invite teammates later.</p>
+        <label>Company name<input name="org" required placeholder="e.g. The Pizza Company Myanmar" /></label>
+        <button class="btn primary full" type="submit">Create workspace</button>
+        <p class="error" id="org-error"></p>
+      </form>
+
+      <div id="invite-box" hidden>
+        <h3>You've been invited</h3>
+        <p id="invite-text"></p>
+        <button class="btn primary full" id="accept-invite">Join workspace</button>
+        <button class="link" id="decline-invite">Create my own workspace instead</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ APP ============ -->
+  <div id="app">
+    <header class="topbar">
+      <div class="logo"><span class="dot"></span>StoreRadar</div>
+      <div class="org" id="org-name"></div>
+      <span class="badge" id="mode-badge"></span>
+      <div class="spacer"></div>
+      <span class="muted small" id="user-email"></span>
+      <button class="btn sm ghost" id="signout-btn">Sign out</button>
+    </header>
+
+    <main class="layout">
+      <aside class="panel">
+        <nav class="tabs" role="tablist">
+          <button class="tab active" data-tab="stores">Stores</button>
+          <button class="tab" data-tab="find">Find</button>
+          <button class="tab" data-tab="analysis">Analysis</button>
+          <button class="tab" data-tab="settings">Brands &amp; Team</button>
+        </nav>
+
+        <!-- STORES -->
+        <section class="tabpane" id="tab-stores">
+          <div class="row gap wrap">
+            <button class="btn primary sm" id="add-store-btn">+ Add store</button>
+            <label class="btn sm">Import Excel<input type="file" id="import-file" accept=".xlsx,.xls,.csv" hidden /></label>
+            <button class="btn sm ghost" id="export-btn">Export</button>
+            <button class="btn sm ghost" id="template-btn">Template</button>
+          </div>
+          <input class="search" id="store-search" placeholder="Search name, township, city…" />
+          <div class="brand-filter" id="brand-filter"></div>
+          <div class="row between small muted"><span id="store-count"></span><label><input type="checkbox" id="pending-only" /> Pending only</label></div>
+          <ul class="list" id="store-list"></ul>
+        </section>
+
+        <!-- FIND -->
+        <section class="tabpane" id="tab-find" hidden>
+          <h4>Find stores with Google Places</h4>
+          <p class="muted small">Searches Google Maps, auto-matches each result to a brand by name/aliases, and adds them as <b>pending</b> for you to verify. Google's Myanmar coverage is incomplete — cross-check with each brand's Facebook page.</p>
+          <form id="find-form" class="stack">
+            <input name="q" required placeholder='e.g. "pizza" or "Pizza Hut"' />
+            <input name="where" placeholder="Area, e.g. Yangon" value="Yangon, Myanmar" />
+            <label class="small"><input type="checkbox" name="bias" checked /> Only around current map view</label>
+            <button class="btn primary">Search</button>
+          </form>
+          <p class="error" id="find-error"></p>
+          <div id="find-results"></div>
+        </section>
+
+        <!-- ANALYSIS -->
+        <section class="tabpane" id="tab-analysis" hidden>
+          <div class="row between">
+            <h4>Trade-area comparison</h4>
+            <button class="btn sm ghost" id="analysis-export">Export</button>
+          </div>
+          <label class="small">Radius
+            <select id="radius">
+              <option value="500">500 m</option><option value="1000" selected>1 km</option>
+              <option value="2000">2 km</option><option value="3000">3 km</option><option value="5000">5 km</option>
+            </select>
+          </label>
+          <p class="muted small" id="pop-status"></p>
+          <div class="table-wrap"><table id="analysis-table"></table></div>
+        </section>
+
+        <!-- SETTINGS -->
+        <section class="tabpane" id="tab-settings" hidden>
+          <h4>Brands</h4>
+          <p class="muted small">Upload a logo for each brand (PNG with transparent background works best). Mark your own brand(s) as <b>Ours</b>. Aliases help auto-matching (e.g. "TPC", "ပီဇာကုမ္ပဏီ").</p>
+          <ul class="list" id="brand-list"></ul>
+          <form id="brand-form" class="row gap">
+            <input name="name" required placeholder="New brand name" />
+            <input name="color" type="color" value="#dc2626" title="Pin colour" />
+            <button class="btn sm primary">Add</button>
+          </form>
+
+          <h4 class="mt">Team</h4>
+          <ul class="list" id="member-list"></ul>
+          <form id="invite-form" class="row gap wrap">
+            <input name="email" type="email" required placeholder="teammate@email.com" />
+            <select name="role"><option value="editor">Editor</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select>
+            <button class="btn sm primary">Invite</button>
+          </form>
+          <p class="muted small" id="invite-msg"></p>
+
+          <h4 class="mt">Data</h4>
+          <button class="btn sm danger" id="clear-btn">Delete all stores &amp; brands</button>
+          <button class="btn sm ghost" id="sample-btn">Load fictional sample data</button>
+        </section>
+      </aside>
+
+      <section class="mapwrap">
+        <div id="map"></div>
+        <div class="map-export">
+          <div class="row gap">
+            <button class="btn sm" id="export-map-btn" aria-haspopup="true">⤓ Export map</button>
+            <label class="btn sm toggle"><input type="checkbox" id="logo-toggle" checked /> Logos</label>
+          </div>
+          <div class="menu" id="export-menu" hidden>
+            <button data-fmt="jpg" data-size="3000">JPG · High (3000 px)</button>
+            <button data-fmt="jpg" data-size="6000">JPG · Print (6000 px)</button>
+            <button data-fmt="pdf" data-size="4500">PDF · A3 map + analysis table</button>
+            <p class="muted small">Exports the current map view, visible brands and selected radius.</p>
+          </div>
+        </div>
+        <div class="map-hint" id="map-hint" hidden>Click the map to place the store · <button class="link" id="cancel-place">Cancel</button></div>
+        <aside class="detail" id="detail" hidden></aside>
+      </section>
+    </main>
+  </div>
+
+  <!-- Store editor -->
+  <dialog id="store-dialog">
+    <form id="store-form" method="dialog" class="stack">
+      <h3 id="store-dialog-title">Store</h3>
+      <div class="grid2">
+        <label>Brand<select name="brandId" required></select></label>
+        <label>Store name<input name="name" required /></label>
+        <label>Latitude<input name="lat" type="number" step="any" required /></label>
+        <label>Longitude<input name="lng" type="number" step="any" required /></label>
+      </div>
+      <label>Google Maps link (fills lat/lng)<input name="mapsLink" placeholder="Paste a maps.google.com link" /></label>
+      <label>Address<input name="address" /></label>
+      <div class="grid3">
+        <label>Township<input name="township" /></label>
+        <label>City<input name="city" /></label>
+        <label>Type<select name="type"><option></option><option>Dine-in</option><option>Delivery only</option><option>Kiosk</option><option>Mall counter</option><option>Drive-thru</option></select></label>
+        <label>Size (sqft)<input name="sizeSqft" type="number" min="0" /></label>
+        <label>Seats<input name="seats" type="number" min="0" /></label>
+        <label>Status<select name="status"><option value="verified">Verified</option><option value="pending">Pending</option><option value="closed">Closed</option></select></label>
+      </div>
+      <label>Notes<textarea name="notes" rows="2"></textarea></label>
+      <div class="row between">
+        <button class="btn danger sm" type="button" id="store-delete">Delete</button>
+        <div class="row gap">
+          <button class="btn" value="cancel" formnovalidate>Cancel</button>
+          <button class="btn primary" value="save">Save</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status"></div>
+</body>
+</html>

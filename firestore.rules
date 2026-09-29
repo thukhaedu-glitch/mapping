@@ -1,0 +1,73 @@
+rules_version = '2';
+// Multi-tenant model: everything a company owns lives under /orgs/{orgId}.
+// A user can read/write an org's data only if /orgs/{orgId}/members/{uid} exists.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function memberDoc(org) { return /databases/$(database)/documents/orgs/$(org)/members/$(request.auth.uid); }
+    function isMember(org) { return signedIn() && exists(memberDoc(org)); }
+    function role(org) { return get(memberDoc(org)).data.role; }
+    function canEdit(org) { return isMember(org) && role(org) in ['owner', 'admin', 'editor']; }
+    function isAdmin(org) { return isMember(org) && role(org) in ['owner', 'admin']; }
+    function myEmail() { return request.auth.token.email.lower(); }
+
+    // User profile: which org they belong to
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && (!('orgId' in request.resource.data) || exists(/databases/$(database)/documents/orgs/$(request.resource.data.orgId)/members/$(uid)));
+    }
+
+    // Pending invites, keyed by lower-case email
+    match /invites/{email} {
+      allow read, delete: if signedIn() && (myEmail() == email || isAdmin(resource.data.orgId));
+      allow create, update: if signedIn() && isAdmin(request.resource.data.orgId)
+        && request.resource.data.role in ['admin', 'editor', 'viewer'];
+    }
+
+    match /orgs/{orgId} {
+      allow read: if isMember(orgId);
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.plan == 'free';                 // plan is changed only by billing backend (Admin SDK)
+      allow update: if isAdmin(orgId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']);
+
+      match /members/{uid} {
+        allow read: if isMember(orgId);
+        allow create: if signedIn() && request.auth.uid == uid && (
+            // bootstrap: creator of the org becomes owner
+            (get(/databases/$(database)/documents/orgs/$(orgId)).data.ownerUid == uid && request.resource.data.role == 'owner')
+            // accepting an invite with the role it was issued for
+            || (exists(/databases/$(database)/documents/invites/$(myEmail()))
+                && get(/databases/$(database)/documents/invites/$(myEmail())).data.orgId == orgId
+                && get(/databases/$(database)/documents/invites/$(myEmail())).data.role == request.resource.data.role));
+        allow update: if isAdmin(orgId) && request.resource.data.role in ['admin', 'editor', 'viewer'] && resource.data.role != 'owner';
+        allow delete: if isAdmin(orgId) && resource.data.role != 'owner';
+      }
+
+      match /brands/{id} {
+        allow read: if isMember(orgId);
+        allow create, update: if canEdit(orgId) && request.resource.data.name is string && request.resource.data.name.size() <= 80
+          // logo = small data URL (resized in the browser); keeps brand docs far below Firestore's 1 MB limit
+          && (!('logo' in request.resource.data) || request.resource.data.logo == null
+              || (request.resource.data.logo is string && request.resource.data.logo.size() < 200000 && request.resource.data.logo.matches('^data:image/(png|webp|jpeg);base64,.*')));
+        allow delete: if canEdit(orgId);
+      }
+
+      match /stores/{id} {
+        allow read: if isMember(orgId);
+        allow create, update: if canEdit(orgId)
+          && request.resource.data.lat is number && request.resource.data.lng is number
+          && request.resource.data.lat >= -90 && request.resource.data.lat <= 90
+          && request.resource.data.lng >= -180 && request.resource.data.lng <= 180;
+        allow delete: if canEdit(orgId);
+      }
+
+      // Written only by Cloud Functions (Admin SDK) — usage metering for billing/quotas
+      match /usage/{month} {
+        allow read: if isMember(orgId);
+        allow write: if false;
+      }
+    }
+  }
+}
