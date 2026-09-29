@@ -1,5 +1,6 @@
 import { createBackend, hasFirebase } from "./data.js";
 import { distance, fmtDist, fmtNum, neighbours, radiusSummary, loadPopGrid, popGridInfo, populationWithin, poiCounts, POI_GROUPS, matchBrand } from "./analysis.js";
+import { TILES } from "./tiles.js";
 import { renderMapCanvas, renderTableCanvas, exportJPG, exportPDF } from "./export.js";
 import { parseFile, exportStores, exportAnalysis, downloadTemplate, coordsFromLink } from "./excel.js";
 
@@ -114,10 +115,7 @@ function applyRole() {
 /* =========================================================== MAP */
 function initMap() {
   S.map = L.map("map", { zoomControl: true }).setView(MYANMAR_CENTER, 12);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
-    maxZoom: 19, subdomains: "abcd",
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
-  }).addTo(S.map);
+  L.tileLayer(TILES.url, { maxZoom: TILES.maxZoom, subdomains: TILES.subdomains || "abc", attribution: TILES.html, crossOrigin: true }).addTo(S.map);
   S.map.on("click", e => {
     if (!S.placing) return;
     stopPlacing();
@@ -507,6 +505,10 @@ function wireUI() {
 /* =========================================================== MAP EXPORT */
 async function exportMap(fmt, longSide) {
   $("#export-menu").hidden = true;
+  if (TILES.maxExport && longSide > TILES.maxExport) {
+    toast(`Free OpenStreetMap tiles are limited to ${TILES.maxExport}px exports — add a MapTiler key in firebase-config.js for print size.`, 6000);
+    longSide = TILES.maxExport;
+  }
   const btn = $("#export-map-btn"), label = btn.textContent;
   btn.disabled = true;
   try {

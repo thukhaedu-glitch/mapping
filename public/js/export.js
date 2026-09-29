@@ -3,7 +3,7 @@
 // then adds pins, the radius circle, a legend and attribution. Text is drawn with the
 // page's own fonts, so Burmese store names render correctly in both JPG and PDF.
 
-const TILE_URL = (z, x, y) => `https://${"abcd"[(x + y) % 4]}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`;
+import { TILES, tileUrl } from "./tiles.js";
 const JSPDF = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
 const FONT = '"Inter", "Noto Sans Myanmar", system-ui, sans-serif';
 
@@ -32,7 +32,7 @@ export async function renderMapCanvas(opts) {
   const s = longSide / Math.max(view.x, view.y);           // output px per screen px
   const W = Math.round(view.x * s), H = Math.round(view.y * s);
   const z2 = map.getZoom() + Math.log2(s);                 // fractional zoom of the output
-  const tz = Math.min(19, Math.max(0, Math.round(z2)));    // tile zoom actually fetched
+  const tz = Math.min(TILES.maxZoom, Math.max(0, Math.round(z2)));    // tile zoom actually fetched
   const k = Math.pow(2, z2 - tz), ts = 256 * k;            // drawn tile size in output px
   const origin = map.project(map.getBounds().getNorthWest(), z2);
 
@@ -67,8 +67,8 @@ export async function renderMapCanvas(opts) {
     for (let y = Math.max(0, Math.floor(origin.y / ts)); y <= Math.min(n - 1, Math.floor((origin.y + H) / ts)); y++)
       jobs.push([x, y]);
   let done = 0, failed = 0;
-  await pool(jobs, 12, async ([x, y]) => {
-    const im = await loadImg(TILE_URL(tz, ((x % n) + n) % n, y));
+  await pool(jobs, TILES.maxConnections || 12, async ([x, y]) => {
+    const im = await loadImg(tileUrl(tz, ((x % n) + n) % n, y));
     if (im) g.drawImage(im, Math.round(x * ts - origin.x), Math.round(y * ts - origin.y), Math.ceil(ts) + 1, Math.ceil(ts) + 1);
     else failed++;
     onProgress(++done / jobs.length);
@@ -158,7 +158,7 @@ export async function renderMapCanvas(opts) {
   y0 += legendRows * 34 * u;
   if (opts.selectedLine) { g.font = `600 ${17 * u}px ${FONT}`; g.fillStyle = "#15181d"; g.fillText(opts.selectedLine, 40 * u, y0 + 4 * u); y0 += 34 * u; }
   g.font = `400 ${13 * u}px ${FONT}`; g.fillStyle = "#6b7280";
-  g.fillText("Map data © OpenStreetMap contributors · © CARTO · Generated with StoreRadar" + (failed ? `  ·  ${failed} map tiles failed to load` : ""), 40 * u, c.height - 22 * u);
+  g.fillText(`Map data ${TILES.text} · Generated with StoreRadar` + (failed ? `  ·  ${failed} map tiles failed to load` : ""), 40 * u, c.height - 22 * u);
 
   return c;
 }

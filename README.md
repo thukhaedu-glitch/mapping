@@ -24,6 +24,12 @@ cd public && python3 -m http.server 8000     # http://localhost:8000
 ```
 Brands & Team → **Load fictional sample data** (brand/ဆိုင်တွေ အကုန် စိတ်ကူးယဉ်)။
 
+## Map tiles (နောက်ခံ map)
+`public/js/firebase-config.js` → `mapTiles`
+- Key မထည့်ရင် **OpenStreetMap** tiles (free, key မလို)။ OSM policy အရ internal/low traffic အတွက်ပဲ — export ကို 3000px အထိ ကန့်ထားတယ်။
+- SaaS ရောင်းမယ်ဆို **MapTiler** free key (https://cloud.maptiler.com, လစဉ် tile 100k) ယူပြီး `maptilerKey` ထည့် → domain restrict လုပ်ပါ။ 6000px print export ဖွင့်မယ်။
+- CARTO က အခု API key လိုလာလို့ default မဟုတ်တော့ဘူး။
+
 ## ၂။ Firebase နဲ့ Deploy
 1. https://console.firebase.google.com → project အသစ်
 2. **Authentication** → Email/Password + Google enable
@@ -83,4 +89,4 @@ cd tests && npm i && npm test        # Java 11+ လိုတယ်
 - Shared "market data" layer — မင်း verify လုပ်ထားတဲ့ competitor data ကို subscriber တွေကို ရောင်းတဲ့ model (တကယ့်တန်ဖိုးက ဒီမှာ)
 
 ## Stack
-Vanilla JS (no build step) · Leaflet + CARTO/OSM tiles · SheetJS · jsPDF · Firebase Auth/Firestore/Hosting/Functions · Overpass API · WorldPop
+Vanilla JS (no build step) · Leaflet + OSM / MapTiler tiles · SheetJS · jsPDF · Firebase Auth/Firestore/Hosting/Functions · Overpass API · WorldPop
