@@ -69,60 +69,105 @@ function renderKpis() {
 }
 
 function renderOrgs() {
+  const box = $("#orgs");
+  const open = A.openId && A.orgs.find(o => o.id === A.openId);
+  $("#tab-orgs .toolbar").hidden = !!open;
+  if (open) return renderOrgDetail(open);
   const q = $("#org-q").value.trim().toLowerCase(), st = $("#org-status-filter").value;
   const list = A.orgs.filter(o => (!st || o.status === st) &&
-    (!q || [o.name, o.ownerEmail, o.profile.contactName, o.profile.phone, o.profile.industry, (o.profile.cities || []).join(" ")].join(" ").toLowerCase().includes(q)));
-  if (!list.length) { $("#orgs").innerHTML = '<p class="muted">No workspaces match.</p>'; return; }
-  $("#orgs").innerHTML = list.map(o => {
-    const p = o.profile || {};
-    const btn = (s, label, cls) => o.status === s ? "" : `<button class="btn sm ${cls}" data-act="status" data-id="${o.id}" data-status="${s}">${label}</button>`;
-    return `<div class="org st-${o.status}">
-      <div class="org-head">
+    (!q || [o.name, o.ownerEmail, o.profile.contactName, o.profile.phone, o.profile.contactEmail, o.profile.industry, (o.profile.cities || []).join(" ")].join(" ").toLowerCase().includes(q)));
+  if (!list.length) { box.innerHTML = '<p class="muted">No workspaces match.</p>'; return; }
+  box.innerHTML = `<div class="org-grid">${list.map(o => { const p = o.profile || {};
+    const flags = [
+      !o.inUse && '<span class="st unused">not in use</span>',
+      missing(p).length && '<span class="st hold">incomplete</span>',
+      ...(o.duplicateOf || []).map(d => `<span class="st blocked">dup ${d.key}</span>`),
+      o.requests?.length && `<span class="st hold">${o.requests.length} top-up</span>`,
+    ].filter(Boolean).join(" ");
+    return `<button class="org-card st-${o.status}" data-open="${o.id}">
+      <div class="oc-head"><span class="oc-avatar">${esc((o.name || "?").trim()[0] || "?")}</span>
+        <div class="oc-title"><b>${esc(o.name)}</b><span class="muted small">${esc(p.industry || "—")}</span></div>
+        <span class="st ${o.status}">${o.status}</span></div>
+      <div class="oc-contact">${p.contactName ? `${esc(p.contactName)}${p.jobTitle ? ` · ${esc(p.jobTitle)}` : ""}` : '<span class="muted">No contact yet</span>'}
+        <div class="muted small">${esc(p.phone || "")}${p.phone && (p.contactEmail || o.ownerEmail) ? " · " : ""}${esc(p.contactEmail || o.ownerEmail || "")}</div></div>
+      <div class="oc-stats"><span><b>${o.members.length}</b> users</span><span><b>${o.stores}</b> stores</span><span><b>${mmk(o.credits)}</b></span><span class="muted">${esc(o.plan)}</span></div>
+      ${flags ? `<div class="oc-flags">${flags}</div>` : ""}
+    </button>`; }).join("")}</div>`;
+}
+
+function renderOrgDetail(o) {
+  const p = o.profile || {};
+  const btn = (st, label, cls) => o.status === st ? "" : `<button class="btn sm ${cls}" data-act="status" data-id="${o.id}" data-status="${st}">${label}</button>`;
+  const row = (k, v, raw) => `<div><dt>${k}</dt><dd>${v === undefined || v === null || v === "" ? '<span class="muted">—</span>' : raw ? v : esc(v)}</dd></div>`;
+  const miss = missing(p);
+  $("#orgs").innerHTML = `
+    <div class="od">
+      <button class="link" data-back>← All workspaces</button>
+      <div class="od-head">
+        <span class="oc-avatar lg">${esc((o.name || "?").trim()[0] || "?")}</span>
         <div class="main">
-          <div class="row gap wrap"><h3>${esc(o.name)}</h3><span class="st ${o.status}">${o.status}</span>
-            ${o.inUse ? "" : '<span class="st unused" title="The owner\'s account opens a different workspace — probably a duplicate. Safe to delete if it has no stores.">not in use</span>'}
-            <code class="muted small">${o.id.slice(0, 6)}</code></div>
-          <div class="org-meta">
-            <span>Owner <b>${esc(o.ownerEmail || o.members.find(m => m.role === "owner")?.email || "—")}</b></span>
-            ${p.contactName ? `<span>Contact <b>${esc(p.contactName)}</b>${p.jobTitle ? ` (${esc(p.jobTitle)})` : ""}</span>` : ""}
-            ${p.phone ? `<span>Phone <b><a href="tel:${esc(p.phone)}">${esc(p.phone)}</a></b></span>` : ""}
-            ${p.contactEmail ? `<span>Email <b><a href="mailto:${esc(p.contactEmail)}">${esc(p.contactEmail)}</a></b></span>` : ""}
-            ${missing(p).length ? `<span class="st hold" title="Missing: ${missing(p).join(", ")}">details incomplete</span>` : ""}
-            ${p.industry ? `<span>${esc(p.industry)}</span>` : ""}
-            <span>Created <b>${date(o.createdAt)}</b></span>
-          </div>
-          <div class="org-meta">
-            <span><b>${o.members.length}</b> members</span><span><b>${o.stores}</b> stores</span><span><b>${o.brands}</b> brands</span>
-            <span>This month: <b>${o.usage.placesSearches || 0}</b> Places · <b>${o.usage.aiCalls || 0}</b> AI</span>
-            <span>AI: <b>${o.aiMode === "platform" ? "StoreRadar credits" : "own key"}</b> · Credits <b>${mmk(o.credits)}</b></span>
-            ${o.requests?.length ? `<span class="st hold">${o.requests.length} top-up request</span>` : ""}
-            ${o.statusNote ? `<span>Note: <b>${esc(o.statusNote)}</b></span>` : ""}
-          </div>
+          <div class="row gap wrap"><h2>${esc(o.name)}</h2><span class="st ${o.status}">${o.status}</span>
+            ${(o.duplicateOf || []).map(d => `<span class="st blocked" title="Same ${d.key} as “${esc(A.orgs.find(x => x.id === d.orgId)?.name || d.orgId)}”">duplicate ${d.key}</span>`).join(" ")}</div>
+          <div class="muted small">${esc(p.industry || "")}${p.industry ? " · " : ""}Created ${date(o.createdAt)} · ID <code>${o.id}</code>${o.statusNote ? ` · Note: <b>${esc(o.statusNote)}</b>` : ""}</div>
         </div>
         <div class="org-actions">
-          <select data-act="plan" data-id="${o.id}" title="Plan">${["free", "pro", "business"].map(x => `<option ${x === o.plan ? "selected" : ""}>${x}</option>`).join("")}</select>
+          <label class="small muted">Plan <select data-act="plan" data-id="${o.id}">${["free", "pro", "business"].map(x => `<option ${x === o.plan ? "selected" : ""}>${x}</option>`).join("")}</select></label>
           ${btn("active", "Activate", "ok")}${btn("hold", "Hold", "warn")}${btn("blocked", "Block", "danger")}
-          <button class="btn sm" data-act="topup" data-id="${o.id}">Credits</button>
-          <button class="btn sm" data-act="edit" data-id="${o.id}">Edit details</button>
           <button class="btn sm danger" data-act="delete" data-id="${o.id}">Delete</button>
         </div>
       </div>
-      <details><summary>Business details &amp; members</summary>
-        <dl class="profile-grid">
-          ${[["Branches", p.branches], ["Country", p.country], ["Cities", (p.cities || []).join(", ")], ["Website / FB", p.website ? `<a href="${esc(p.website)}" target="_blank" rel="noopener">${esc(p.website)}</a>` : ""],
-            ["Competitors", (p.competitors || []).join(", ")], ["Goal", p.goal], ["Workspace ID", `<code>${o.id}</code>`]]
-            .map(([k, v]) => `<div><dt>${k}</dt><dd>${v === undefined || v === "" ? "—" : k === "Website / FB" || k === "Workspace ID" ? v : esc(v)}</dd></div>`).join("")}
-        </dl>
-      </details>
-      <div class="members-edit">
-        ${o.members.map(m => `<div class="mrow"><span>${esc(m.email)}</span>
-          <select data-mrole="${m.uid}" data-org="${o.id}">${["owner", "admin", "editor", "viewer"].map(r => `<option ${r === m.role ? "selected" : ""}>${r}</option>`).join("")}</select>
-          ${m.role === "owner" ? "" : `<button class="btn sm ghost danger" data-mremove="${m.uid}" data-org="${o.id}" title="Remove from workspace">✕</button>`}</div>`).join("")}
-        <button class="btn sm" data-act="adduser" data-id="${o.id}">+ Add user</button>
+
+      ${o.inUse ? "" : `<div class="od-alert">The owner's account currently isn't linked to this workspace (they'd be asked to create a new one).
+        <button class="btn sm ok" data-act="useowner" data-id="${o.id}">Make owner's workspace</button></div>`}
+      ${miss.length ? `<div class="od-alert warn">Business details incomplete: ${miss.join(", ")}. The owner is asked every time they open the app.</div>` : ""}
+
+      <div class="kpis">
+        ${[[o.members.length, "Users"], [o.stores, "Stores"], [o.brands, "Brands"], [mmk(o.credits), "AI credits"], [o.usage.aiCalls || 0, "AI uses this month"], [o.usage.placesSearches || 0, "Places searches this month"]]
+          .map(([v, l]) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`).join("")}
+      </div>
+
+      <div class="od-cols">
+        <section class="org">
+          <div class="row between"><h3>Business details</h3><button class="btn sm" data-act="edit" data-id="${o.id}">Edit</button></div>
+          <dl class="od-dl">
+            ${row("Contact person", p.contactName)}${row("Position", p.jobTitle)}
+            ${row("Phone", p.phone ? `<a href="tel:${esc(p.phone)}">${esc(p.phone)}</a>` : "", true)}
+            ${row("Email", (p.contactEmail || o.ownerEmail) ? `<a href="mailto:${esc(p.contactEmail || o.ownerEmail)}">${esc(p.contactEmail || o.ownerEmail)}</a>` : "", true)}
+            ${row("Business type", p.industry)}${row("Branches", p.branches)}${row("Country", p.country)}${row("Cities", (p.cities || []).join(", "))}
+            ${row("Website / FB", p.website ? `<a href="${esc(p.website)}" target="_blank" rel="noopener">${esc(p.website)}</a>` : "", true)}
+            ${row("Competitors", (p.competitors || []).join(", "))}${row("Goal", p.goal)}${row("Owner login", o.ownerEmail)}
+          </dl>
+        </section>
+
+        <section class="org">
+          <div class="row between"><h3>Team</h3><button class="btn sm" data-act="adduser" data-id="${o.id}">+ Add user</button></div>
+          <div class="od-members">
+            ${o.members.map(m => `<div class="mrow"><span class="grow">${esc(m.email)}</span>
+              <select data-mrole="${m.uid}" data-org="${o.id}">${["owner", "admin", "editor", "viewer"].map(r => `<option ${r === m.role ? "selected" : ""}>${r}</option>`).join("")}</select>
+              ${m.role === "owner" ? '<span style="width:30px"></span>' : `<button class="btn sm ghost danger" data-mremove="${m.uid}" data-org="${o.id}" title="Remove from workspace">✕</button>`}</div>`).join("")}
+          </div>
+
+          <div class="row between" style="margin-top:14px"><h3>AI &amp; credits</h3><button class="btn sm" data-act="topup" data-id="${o.id}">Top up / adjust</button></div>
+          <p class="small">Mode: <b>${o.aiMode === "platform" ? "StoreRadar AI (credits)" : "own API key"}</b> · Balance <b>${mmk(o.credits)}</b></p>
+          ${o.requests?.length ? o.requests.map(r => `<div class="od-alert warn"><span>Top-up request: <b>${esc(r.package)} ${mmk(r.mmk)}</b> by ${esc(r.by)} (${date(r.at)})</span>
+            <span class="acts"><button class="btn sm ok" data-req="${r.id}" data-org="${o.id}" data-do="approve">Approve &amp; top up</button><button class="btn sm" data-req="${r.id}" data-org="${o.id}" data-do="dismiss">Dismiss</button></span></div>`).join("") : ""}
+          <div id="od-clog" class="small muted">Loading credit history…</div>
+        </section>
       </div>
     </div>`;
-  }).join("");
+  api("creditLog", { orgId: o.id }).then(r => {
+    const el = $("#od-clog"); if (!el) return;
+    el.innerHTML = r.log.length ? `<table class="admin-table"><thead><tr><th>Date</th><th>What</th><th>MMK</th><th>Balance</th><th>By</th></tr></thead><tbody>${r.log.slice(0, 15).map(l =>
+      `<tr><td>${date(l.at)}</td><td>${esc(l.type === "charge" ? "AI " + (l.task || "") : l.type)}${l.note ? ` · ${esc(l.note)}` : ""}</td><td>${l.amount > 0 ? "+" : ""}${Math.round(l.amount).toLocaleString()}</td><td>${Math.round(l.balanceAfter).toLocaleString()}</td><td>${esc(l.by || "")}</td></tr>`).join("")}</tbody></table>` : "No credit activity yet.";
+  }).catch(x => { const el = $("#od-clog"); if (el) el.textContent = x.message; });
 }
+
+function showTab(name) {
+  document.querySelectorAll(".admin-tabs .tab").forEach(x => x.classList.toggle("active", x.dataset.tab === name));
+  ["orgs", "biz", "credits", "users"].forEach(k => ($("#tab-" + k).hidden = k !== name));
+}
+function openOrg(id) { A.openId = id; if (location.hash !== "#w/" + id) history.pushState(null, "", "#w/" + id); showTab("orgs"); renderOrgs(); window.scrollTo(0, 0); }
+function closeOrg() { A.openId = null; if (location.hash) history.pushState(null, "", location.pathname); renderOrgs(); }
 
 /* ------------------------------------------------------------ users */
 async function loadUsers() {
@@ -140,7 +185,7 @@ function renderUsers() {
   $("#users").innerHTML = `<thead><tr><th>Email</th><th>Workspace</th><th>Role</th><th>Sign-in</th><th>Created</th><th>Last sign-in</th><th>Status</th><th>Actions</th></tr></thead><tbody>` +
     list.map(u => `<tr>
       <td>${esc(u.email)}${u.superAdmin ? ' <span class="st super">super admin</span>' : ""}${u.verified ? "" : ' <span class="pill" title="Email not verified">unverified</span>'}</td>
-      <td>${esc(orgName(u.orgId)) || '<span class="muted">—</span>'}</td>
+      <td>${u.orgId && orgName(u.orgId) ? `<button class="link" data-open-org="${u.orgId}">${esc(orgName(u.orgId))}</button>` : '<span class="muted">—</span>'}</td>
       <td>${esc(role(u.uid, u.orgId))}</td>
       <td class="small">${u.providers.map(p => (p === "google.com" ? "Google" : p === "password" ? "Password" : p)).join(", ")}</td>
       <td>${date(u.created)}</td><td>${ago(u.lastSignIn)}</td>
@@ -173,7 +218,10 @@ async function run(label, fn, reload = loadOrgs) {
 }
 
 function wire() {
+  window.addEventListener("popstate", () => { const m = location.hash.match(/^#w\/(.+)$/); A.openId = m ? m[1] : null; renderOrgs(); });
+  const m0 = location.hash.match(/^#w\/(.+)$/); if (m0) A.openId = m0[1];
   document.querySelectorAll(".admin-tabs .tab").forEach(t => (t.onclick = () => {
+    if (t.dataset.tab === "orgs" && A.openId) closeOrg();
     document.querySelectorAll(".admin-tabs .tab").forEach(x => x.classList.toggle("active", x === t));
     ["orgs", "biz", "credits", "users"].forEach(k => ($("#tab-" + k).hidden = t.dataset.tab !== k));
     if (t.dataset.tab === "biz") renderBiz();
@@ -192,6 +240,8 @@ function wire() {
     if (b.dataset.do === "approve") topUpDialog(o, r);
     else run("Request dismissed", () => api("dismissRequest", { orgId: o.id, requestId: r.id }), async () => { await loadOrgs(); renderCredits(); });
   });
+  $("#biz").addEventListener("click", e => { const ob = e.target.closest("[data-open-biz]"); if (ob) openOrg(ob.dataset.openBiz); });
+  $("#users").addEventListener("click", e => { const ou = e.target.closest("[data-open-org]"); if (ou) openOrg(ou.dataset.openOrg); });
   $("#biz").addEventListener("click", e => { const b = e.target.closest("[data-edit]"); if (b) editProfile(A.orgs.find(o => o.id === b.dataset.edit)); });
   $("#refresh").onclick = () => loadOrgs().catch(x => toast(x.message, 5000));
   $("#refresh-users").onclick = () => loadUsers().catch(x => toast(x.message, 5000));
@@ -204,6 +254,13 @@ function wire() {
     run(`Plan set to ${el.value}`, () => api("setOrgPlan", { orgId: el.dataset.id, plan: el.value }));
   });
   $("#orgs").addEventListener("click", e => {
+    const op = e.target.closest("[data-open]"); if (op) return openOrg(op.dataset.open);
+    if (e.target.closest("[data-back]")) return closeOrg();
+    const rq = e.target.closest("[data-req]");
+    if (rq) {
+      const o = A.orgs.find(x => x.id === rq.dataset.org), r = o.requests.find(x => x.id === rq.dataset.req);
+      return rq.dataset.do === "approve" ? topUpDialog(o, r) : run("Request dismissed", () => api("dismissRequest", { orgId: o.id, requestId: r.id }));
+    }
     const rm = e.target.closest("[data-mremove]");
     if (rm) {
       const o = A.orgs.find(x => x.id === rm.dataset.org), m = o.members.find(x => x.uid === rm.dataset.mremove);
@@ -221,6 +278,7 @@ function wire() {
     }
     if (el.dataset.act === "edit") return editProfile(o);
     if (el.dataset.act === "topup") return topUpDialog(o);
+    if (el.dataset.act === "useowner") return run("Owner now opens this workspace", () => api("useAsOwnerWorkspace", { orgId: o.id }));
     if (el.dataset.act === "adduser") return addUserDialog(o);
     if (el.dataset.act === "delete") {
       dialog(`<h3>Delete “${esc(o.name)}” permanently?</h3><p class="muted small">Deletes all ${o.stores} stores, ${o.brands} brands, settings and AI key. Member logins stay (they'll see “create workspace”). This cannot be undone.</p>
@@ -363,7 +421,7 @@ function renderBiz() {
   $("#biz").innerHTML = `<thead><tr><th>Company</th><th>Contact</th><th>Position</th><th>Phone</th><th>Email</th><th>Business type</th><th>Branches</th><th>Cities</th><th>Website / FB</th><th>Competitors</th><th>Goal</th><th>Status</th><th>Joined</th><th></th></tr></thead><tbody>` +
     list.map(o => { const p = o.profile || {}, miss = missing(p);
       return `<tr>
-        <td><b>${esc(o.name)}</b>${miss.length ? `<div><span class="st hold" title="Missing: ${miss.join(", ")}">incomplete</span></div>` : ""}</td>
+        <td><button class="link" data-open-biz="${o.id}"><b>${esc(o.name)}</b></button>${miss.length ? `<div><span class="st hold" title="Missing: ${miss.join(", ")}">incomplete</span></div>` : ""}</td>
         <td>${cell(p.contactName)}</td><td>${cell(p.jobTitle)}</td>
         <td>${p.phone ? `<a href="tel:${esc(p.phone)}">${esc(p.phone)}</a>` : cell()}</td>
         <td>${p.contactEmail || o.ownerEmail ? `<a href="mailto:${esc(p.contactEmail || o.ownerEmail)}">${esc(p.contactEmail || o.ownerEmail)}</a>` : cell()}</td>

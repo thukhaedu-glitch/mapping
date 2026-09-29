@@ -29,6 +29,16 @@ service cloud.firestore {
         && request.resource.data.role in ['admin', 'editor', 'viewer'];
     }
 
+    // Uniqueness registry: one workspace per business name and per phone ("name:<key>", "phone:<digits>").
+    // "create" fails if the key already exists, so two workspaces can't claim the same business.
+    match /registry/{key} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['ownerUid', 'orgId', 'type', 'at']);
+      allow update: if signedIn() && resource.data.ownerUid == request.auth.uid && request.resource.data.ownerUid == request.auth.uid;
+      allow delete: if false;
+    }
+
     // Platform-wide settings (AI prices, credit packages, payment contact) — readable by any signed-in user
     match /platform/{doc} {
       allow read: if signedIn();

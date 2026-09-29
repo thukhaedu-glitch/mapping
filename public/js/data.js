@@ -10,6 +10,15 @@ export const hasFirebase = !!(firebaseConfig.apiKey && firebaseConfig.projectId)
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 
 /* ------------------------------------------------------------------ DEMO */
+/** Normalised uniqueness keys for a business: its name and its phone number. */
+export function registryKeys(name, phone) {
+  let n = String(name || "").toLowerCase().normalize("NFKC").replace(/[^\p{L}\p{M}\p{N}]+/gu, "");
+  for (let prev; prev !== n;) { prev = n; n = n.replace(/(coltd|limited|ltd|co|company|myanmar)$/u, ""); }   // "X Co., Ltd" = "X"
+  const digits = String(phone || "").replace(/\D/g, "");
+  const ph = digits.length >= 7 ? digits.slice(-9) : "";           // "+95 9 xxx", "09 xxx", "959xxx" → same key
+  return [n && `name:${n}`, ph && `phone:${ph}`].filter(Boolean);
+}
+
 class DemoBackend {
   constructor() {
     this.mode = "demo";
@@ -124,12 +133,32 @@ class FirebaseBackend {
     return this._creating;
   }
   async _createOrg(name, profile) {
-    const { doc, collection, setDoc, serverTimestamp } = this.m;
+    const { doc, collection, setDoc, getDoc, serverTimestamp } = this.m;
     const u = this.user;
     // Guard against double-submits / retries: if this account already has a workspace, open it instead
     const existing = await this.resolveOrg().catch(() => ({}));
     if (existing.org) return existing;
     const ref = doc(collection(this.fs, "orgs"));
+    // Reserve the business name and phone first — rules refuse keys another account already holds
+    const keys = registryKeys(name, profile.phone);
+    const held = await Promise.all(keys.map(k => getDoc(doc(this.fs, "registry", k)).catch(() => null)));
+    const clash = held.find(h => h?.exists() && h.data().ownerUid !== u.uid);
+    if (clash) {
+      const what = clash.id.startsWith("phone:") ? "phone number" : "business name";
+      throw new Error(`A workspace with this ${what} already exists. Ask its owner to add you as a team member, or contact StoreRadar support.`);
+    }
+    // This account already owns a workspace for this business (e.g. its profile lost the link) → reopen it, don't duplicate
+    for (const h of held) {
+      const orgId = h?.exists() && h.data().ownerUid === u.uid ? h.data().orgId : null;
+      if (!orgId) continue;
+      const mem = await getDoc(doc(this.fs, "orgs", orgId, "members", u.uid)).catch(() => null);
+      if (mem?.exists()) {
+        await setDoc(doc(this.fs, "users", u.uid), { email: u.email, orgId });
+        const r = await this.resolveOrg();
+        if (r.org) return r;
+      }
+    }
+    await Promise.all(keys.map(k => setDoc(doc(this.fs, "registry", k), { ownerUid: u.uid, orgId: ref.id, type: k.split(":")[0], at: serverTimestamp() })));
     // Each write depends on the previous one in the security rules (org → owner → profile/brand),
     // so they must be sequential — but the last two run in parallel and we skip re-reading.
     await setDoc(ref, { name, ownerUid: u.uid, ownerEmail: u.email, plan: "free", status: "active", profile, createdAt: serverTimestamp() });

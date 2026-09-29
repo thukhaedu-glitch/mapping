@@ -37,7 +37,7 @@ async function orgSummary(doc) {
     ref.collection("topupRequests").where("status", "==", "pending").get(),
   ]);
   return {
-    id: doc.id, name: d.name, plan: d.plan || "free", status: d.status || "active", ownerEmail: d.ownerEmail || "",
+    id: doc.id, name: d.name, ownerUid: d.ownerUid || "", plan: d.plan || "free", status: d.status || "active", ownerEmail: d.ownerEmail || "",
     profile: d.profile || {}, createdAt: ts(d.createdAt), statusNote: d.statusNote || "",
     members: members.docs.map(m => ({ uid: m.id, email: m.data().email, role: m.data().role })),
     stores: stores.data().count, brands: brands.data().count, usage: usage.data() || {},
@@ -48,10 +48,32 @@ async function orgSummary(doc) {
   };
 }
 
+/** Same normalisation as the client (public/js/data.js registryKeys). */
+function registryKeys(name, phone) {
+  let n = String(name || "").toLowerCase().normalize("NFKC").replace(/[^\p{L}\p{M}\p{N}]+/gu, "");
+  for (let prev; prev !== n;) { prev = n; n = n.replace(/(coltd|limited|ltd|co|company|myanmar)$/u, ""); }
+  const digits = String(phone || "").replace(/\D/g, "");
+  const ph = digits.length >= 7 ? digits.slice(-9) : "";
+  return [n && `name:${n}`, ph && `phone:${ph}`].filter(Boolean);
+}
+
+/** Workspaces created before the registry existed get their name/phone reserved; clashes are flagged. */
+async function backfillRegistry(orgs) {
+  for (const o of orgs) {
+    o.duplicateOf = [];
+    for (const k of registryKeys(o.name, o.profile?.phone)) {
+      const ref = db().doc(`registry/${k}`), cur = await ref.get();
+      if (!cur.exists) await ref.set({ ownerUid: o.ownerUid || "", orgId: o.id, type: k.split(":")[0], at: FieldValue.serverTimestamp() });
+      else if (cur.data().orgId !== o.id) o.duplicateOf.push({ key: k.split(":")[0], orgId: cur.data().orgId });
+    }
+  }
+}
+
 const actions = {
   async overview() {
     const [snap, pricing] = await Promise.all([db().collection("orgs").get(), getPricing()]);
     const orgs = await Promise.all(snap.docs.map(orgSummary));
+    await backfillRegistry(orgs).catch(e => console.error("registry backfill", e));
     const p = platformAI();
     return {
       orgs: orgs.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))),
@@ -127,6 +149,20 @@ const actions = {
     return { ok: true };
   },
 
+  /** Point the owner's account at this workspace (fixes "not in use"). */
+  async useAsOwnerWorkspace(admin, { orgId }) {
+    const org = await db().doc(`orgs/${orgId}`).get();
+    const uid = org.data()?.ownerUid;
+    if (!uid) throw new HttpError(400, "This workspace has no owner.");
+    const m = db().doc(`orgs/${orgId}/members/${uid}`);
+    const batch = db().batch();
+    if (!(await m.get()).exists) batch.set(m, { email: org.data().ownerEmail || "", role: "owner", joinedAt: FieldValue.serverTimestamp() });
+    batch.set(db().doc(`users/${uid}`), { orgId, email: org.data().ownerEmail || "" }, { merge: true });
+    await batch.commit();
+    await log(admin, "useAsOwnerWorkspace", orgId);
+    return { ok: true };
+  },
+
   async setOrgPlan(admin, { orgId, plan }) {
     if (!PLANS.includes(plan)) throw new HttpError(400, "Bad plan");
     await db().doc(`orgs/${orgId}`).update({ plan });
@@ -139,12 +175,22 @@ const actions = {
     const d = await ref.get();
     if (!d.exists) throw new HttpError(404, "Workspace not found");
     if (confirmName !== d.data().name) throw new HttpError(400, "Type the exact workspace name to confirm.");
-    const members = await ref.collection("members").get();
-    const invites = await db().collection("invites").where("orgId", "==", orgId).get();
+    const [members, invites, reg, allOrgs] = await Promise.all([
+      ref.collection("members").get(), db().collection("invites").where("orgId", "==", orgId).get(),
+      db().collection("registry").where("orgId", "==", orgId).get(), db().collection("orgs").get(),
+    ]);
     await db().recursiveDelete(ref);                                   // org + stores, brands, members, settings, secrets, usage
     const batch = db().batch();
-    for (const m of members.docs) batch.set(db().doc(`users/${m.id}`), { orgId: FieldValue.delete() }, { merge: true });
+    // Members whose "current workspace" was this one are pointed at another workspace they belong to (if any)
+    for (const m of members.docs) {
+      const prof = await db().doc(`users/${m.id}`).get();
+      if (prof.exists && prof.data().orgId && prof.data().orgId !== orgId) continue;
+      let other = null;
+      for (const o of allOrgs.docs) if (o.id !== orgId && (await o.ref.collection("members").doc(m.id).get()).exists) { other = o.id; break; }
+      batch.set(prof.ref, { orgId: other || FieldValue.delete() }, { merge: true });
+    }
     invites.docs.forEach(i => batch.delete(i.ref));
+    reg.docs.forEach(r => batch.delete(r.ref));                         // free the business name / phone
     await batch.commit();
     await log(admin, "deleteOrg", orgId, { name: d.data().name, stores: null });
     return { ok: true };
