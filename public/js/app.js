@@ -62,6 +62,23 @@ function showAuth(step, invite) {
   if (invite) { $("#invite-text").textContent = `${invite.invitedBy} invited you to "${invite.orgName}" as ${invite.role}.`; S.pendingInvite = invite; }
 }
 
+// Firebase Auth error codes → what to actually do about them
+function authMsg(x) {
+  const m = {
+    "auth/configuration-not-found": "Firebase Authentication is not set up yet.\nConsole → Build → Authentication → Get started → enable Email/Password.",
+    "auth/operation-not-allowed": "This sign-in method is disabled.\nConsole → Authentication → Sign-in method → enable Email/Password (and Google).",
+    "auth/invalid-credential": "Wrong email or password — or no account yet (use Create account).",
+    "auth/email-already-in-use": "An account with this email already exists — use Sign in.",
+    "auth/weak-password": "Password must be at least 6 characters.",
+    "auth/invalid-email": "That email address is not valid.",
+    "auth/unauthorized-domain": "This domain is not authorised.\nConsole → Authentication → Settings → Authorized domains → add it.",
+    "auth/popup-closed-by-user": "Google sign-in window was closed.",
+    "auth/too-many-requests": "Too many attempts — wait a few minutes.",
+    "auth/network-request-failed": "Network error — check your connection.",
+  };
+  return m[x.code] || `${x.code || ""} ${x.message || x}`.trim();
+}
+
 function wireAuth() {
   const err = m => ($("#auth-error").textContent = m);
   $("#login-form").addEventListener("submit", async e => {
@@ -69,9 +86,9 @@ function wireAuth() {
     const f = new FormData(e.target), act = e.submitter?.dataset.act;
     err("");
     try { act === "signup" ? await S.api.signUp(f.get("email"), f.get("password")) : await S.api.signIn(f.get("email"), f.get("password")); }
-    catch (x) { err(x.code === "auth/invalid-credential" ? "Wrong email or password." : x.message); }
+    catch (x) { err(authMsg(x)); }
   });
-  $("#google-btn").onclick = () => S.api.signInGoogle().catch(x => err(x.message));
+  $("#google-btn").onclick = () => S.api.signInGoogle().catch(x => err(authMsg(x)));
   $("#reset-btn").onclick = async () => {
     const email = $("#login-form").email.value;
     if (!email) return err("Type your email first.");

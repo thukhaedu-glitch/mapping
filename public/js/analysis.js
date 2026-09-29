@@ -51,6 +51,7 @@ export async function loadPopGrid(url = "data/pop_grid.json") {
     const r = await fetch(url, { cache: "force-cache" });
     if (!r.ok) return null;
     popGrid = await r.json();
+    if (!popGrid.points?.length) { popGrid = null; return null; }   // placeholder file → use the WorldPop API instead
     // bucket by 0.05° tiles so a radius query only scans nearby cells
     popIndex = new Map();
     for (const p of popGrid.points) {
