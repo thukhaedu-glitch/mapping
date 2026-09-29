@@ -36,7 +36,6 @@
           <button class="btn primary" type="submit" data-act="signin">Sign in</button>
           <button class="btn" type="submit" data-act="signup">Create account</button>
         </div>
-        <button class="btn ghost full" type="button" id="google-btn">Continue with Google</button>
         <button class="link" type="button" id="reset-btn">Forgot password?</button>
         <p class="error" id="auth-error"></p>
       </form>
@@ -55,7 +54,8 @@
           <label>Number of branches *<input name="branches" type="number" min="0" max="100000" required placeholder="e.g. 12" /></label>
           <label>Contact person *<input name="contactName" required maxlength="80" autocomplete="name" /></label>
           <label>Phone / Viber *<input name="phone" required maxlength="30" type="tel" autocomplete="tel" placeholder="+95 9…" /></label>
-          <label>Your role<input name="jobTitle" maxlength="60" placeholder="e.g. Marketing Manager" /></label>
+          <label>Position *<input name="jobTitle" required maxlength="60" placeholder="e.g. Marketing Manager" /></label>
+          <label>Contact email *<input name="contactEmail" type="email" required maxlength="120" autocomplete="email" /></label>
           <label>Country *<select name="country" required><option>Myanmar</option><option>Thailand</option><option>Cambodia</option><option>Laos</option><option>Vietnam</option><option>UAE</option><option>Other</option></select></label>
         </div>
         <label>Main cities (comma-separated)<input name="cities" maxlength="200" placeholder="Yangon, Mandalay" /></label>
@@ -83,6 +83,7 @@
       <div class="logo"><span class="dot"></span>StoreRadar</div>
       <div class="org" id="org-name"></div>
       <span class="badge" id="mode-badge"></span>
+      <span class="badge unverified" id="unverified-badge" hidden title="Your account is waiting for verification by the StoreRadar team.">⚠ Unverified</span>
       <div class="spacer"></div>
       <span class="muted small" id="user-email"></span>
       <button class="btn sm ghost" id="signout-btn">Sign out</button>
@@ -163,26 +164,48 @@
             <button class="btn sm primary">Add</button>
           </form>
 
-          <h4 class="mt">AI (use your own key)</h4>
-          <p class="muted small">Connect Claude, ChatGPT or Gemini with your own API key. The key is stored on the server and can't be read back from any browser — you pay your AI provider directly.</p>
-          <div id="ai-view" class="muted small"></div>
-          <form id="ai-form" class="stack">
+          <h4 class="mt">AI</h4>
+          <div class="ai-modes" id="ai-modes">
+            <label class="ai-mode"><input type="radio" name="ai-mode" value="platform" />
+              <span><b>StoreRadar AI</b> — no setup, pay with credits (MMK)</span></label>
+            <label class="ai-mode"><input type="radio" name="ai-mode" value="own" />
+              <span><b>My own API key</b> — Claude, ChatGPT or Gemini; you pay your AI provider</span></label>
+          </div>
+
+          <div id="ai-platform" class="stack" hidden>
+            <div class="credit-card"><span class="muted small">AI credit balance</span><b id="credit-balance">—</b></div>
+            <div id="ai-offers" class="ai-modes"></div>
+            <div id="credit-packages" class="stack"></div>
+            <p class="muted small" id="credit-contact"></p>
+            <div id="credit-pending"></div>
+            <details><summary class="small muted">Credit history</summary><div class="table-wrap"><table id="credit-log"></table></div></details>
+          </div>
+
+          <form id="ai-form" class="stack" hidden>
+            <p class="muted small">Your key is stored on the server and can't be read back from any browser.</p>
+            <div id="ai-view" class="muted small"></div>
             <div class="grid2">
               <label>Provider<select name="provider"></select></label>
               <label>Model<input name="model" list="ai-models" /></label>
             </div>
             <datalist id="ai-models"></datalist>
             <label>API key <span id="ai-key-link"></span><input name="key" type="password" autocomplete="off" placeholder="Paste key (leave blank to keep the saved one)" /></label>
-            <div class="row gap"><button class="btn sm primary">Save</button><button class="btn sm" type="button" id="ai-test">Test connection</button></div>
-            <p class="small" id="ai-msg"></p>
+            <div class="row gap"><button class="btn sm primary">Save</button></div>
           </form>
+          <div class="row gap"><button class="btn sm" type="button" id="ai-test">Test AI connection</button></div>
+          <p class="small" id="ai-msg"></p>
 
           <h4 class="mt">Team</h4>
           <ul class="list" id="member-list"></ul>
-          <form id="invite-form" class="row gap wrap">
-            <input name="email" type="email" required placeholder="teammate@email.com" />
-            <select name="role"><option value="editor">Editor</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select>
-            <button class="btn sm primary">Invite</button>
+          <form id="invite-form" class="stack">
+            <p class="muted small">Add a teammate — their login is created right away. Send them the email + password.</p>
+            <div class="grid2">
+              <input name="email" type="email" required placeholder="teammate@email.com" />
+              <input name="name" placeholder="Name" />
+              <input name="password" minlength="8" placeholder="Password (min 8)" />
+              <select name="role"><option value="editor">Editor — can edit</option><option value="viewer">Viewer — read only</option><option value="admin">Admin — can manage team</option></select>
+            </div>
+            <div class="row"><button class="btn sm primary">Add user</button></div>
           </form>
           <p class="muted small" id="invite-msg"></p>
 
@@ -242,6 +265,29 @@
           <button class="btn primary" value="save">Save</button>
         </div>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="profile-dialog">
+    <form id="profile-form" method="dialog" class="stack">
+      <h3>Complete your business details</h3>
+      <p class="muted small">We need a contact for your workspace. This takes 30 seconds.</p>
+      <div class="grid2">
+        <label>Contact person *<input name="contactName" required maxlength="80" /></label>
+        <label>Position *<input name="jobTitle" required maxlength="60" /></label>
+        <label>Phone / Viber *<input name="phone" type="tel" required maxlength="30" /></label>
+        <label>Contact email *<input name="contactEmail" type="email" required maxlength="120" /></label>
+        <label>Business type *
+          <select name="industry" required><option value="">Choose…</option><option>Restaurant / QSR</option><option>Café / bakery</option><option>Retail shop</option>
+            <option>Supermarket / convenience</option><option>Pharmacy / health</option><option>Beauty / cosmetics</option>
+            <option>Bank / finance branch</option><option>Telecom / mobile shop</option><option>Education</option><option>Other</option></select></label>
+        <label>Number of branches *<input name="branches" type="number" min="0" required /></label>
+      </div>
+      <label>Main cities<input name="cities" maxlength="200" /></label>
+      <label>Website or Facebook page<input name="website" maxlength="200" /></label>
+      <label>Main competitors<input name="competitors" maxlength="300" /></label>
+      <div class="row" style="justify-content:flex-end"><button class="btn primary" value="save">Save</button></div>
+      <p class="error" id="profile-error"></p>
     </form>
   </dialog>
 

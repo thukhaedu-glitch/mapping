@@ -91,6 +91,7 @@ async function busy(btn, text, fn) {
 
 function showAuth(step, invite) {
   $("#auth").hidden = false; $("#app").hidden = true;
+  if (step === "org" && S.api.user?.email && !$("#org-form").contactEmail.value) $("#org-form").contactEmail.value = S.api.user.email;
   $("#login-form").hidden = step !== "login"; $("#org-form").hidden = step !== "org"; $("#invite-box").hidden = step !== "invite";
   if (invite) { $("#invite-text").textContent = `${invite.invitedBy} invited you to "${invite.orgName}" as ${invite.role}.`; S.pendingInvite = invite; }
 }
@@ -123,7 +124,6 @@ function wireAuth() {
         act === "signup" ? S.api.signUp(f.get("email"), f.get("password")) : S.api.signIn(f.get("email"), f.get("password")));
     } catch (x) { err(authMsg(x)); }
   });
-  $("#google-btn").onclick = () => S.api.signInGoogle().catch(x => err(authMsg(x)));
   $("#reset-btn").onclick = async () => {
     const email = $("#login-form").email.value;
     if (!email) return err("Type your email first.");
@@ -136,7 +136,7 @@ function wireAuth() {
     const list = v => String(v || "").split(",").map(x => x.trim()).filter(Boolean).slice(0, 20);
     const profile = {
       industry: f.industry, branches: +f.branches || 0, contactName: f.contactName.trim(), phone: f.phone.trim(),
-      jobTitle: (f.jobTitle || "").trim(), country: f.country, cities: list(f.cities), website: (f.website || "").trim(),
+      jobTitle: (f.jobTitle || "").trim(), contactEmail: (f.contactEmail || "").trim(), country: f.country, cities: list(f.cities), website: (f.website || "").trim(),
       competitors: list(f.competitors), goal: f.goal,
     };
     try { const r = await busy(e.submitter || e.target.querySelector("button"), "Creating workspace…", () => S.api.createOrg(f.org.trim(), profile)); if (r.org) startApp(); }
@@ -161,6 +161,11 @@ function startApp() {
   started = true;
 
   initMap(); wireUI();
+  checkProfile();
+  checkVerified();
+  // keep asking until the business details are complete
+  setInterval(() => { if (!$("#profile-dialog").open) checkProfile(); }, 10 * 60 * 1000);
+  window.addEventListener("focus", () => { if (!$("#profile-dialog").open && Date.now() - (S.lastProfileCheck || 0) > 5 * 60 * 1000) checkProfile(); });
   S.api.on("brands", list => { S.brands = list.sort((a, b) => (b.isOwn - a.isOwn) || a.name.localeCompare(b.name)); S.brandsById = Object.fromEntries(list.map(b => [b.id, b])); renderAll(); });
   S.api.on("stores", list => { S.stores = list; renderAll(); });
   loadPopGrid().then(() => renderAnalysis());
@@ -464,7 +469,18 @@ function renderBrands() {
 
 async function renderMembers() {
   const list = await S.api.listMembers().catch(() => []);
-  $("#member-list").innerHTML = list.map(m => `<li style="cursor:default"><div class="main"><div class="t">${esc(m.email)}</div></div><span class="pill">${esc(m.role)}</span></li>`).join("");
+  const me = S.api.user?.uid;
+  const editable = m => isAdmin() && m.role !== "owner" && m.id !== me;
+  $("#member-list").innerHTML = list.map(m => `<li style="cursor:default"><div class="main"><div class="t">${esc(m.email)}${m.id === me ? ' <span class="muted small">(you)</span>' : ""}</div></div>
+    ${editable(m) ? `<select data-role="${m.id}" style="width:auto;padding:4px 6px;font-size:12px">${["admin", "editor", "viewer"].map(r => `<option ${r === m.role ? "selected" : ""}>${r}</option>`).join("")}</select>
+      <button class="btn sm ghost" data-remove="${m.id}" title="Remove">✕</button>` : `<span class="pill">${esc(m.role)}</span>`}</li>`).join("");
+  $("#member-list").querySelectorAll("[data-role]").forEach(sel => (sel.onchange = () =>
+    S.api.team("role", { uid: sel.dataset.role, role: sel.value }).then(() => toast("Role updated"), x => { toast(x.message, 5000); renderMembers(); })));
+  $("#member-list").querySelectorAll("[data-remove]").forEach(b => (b.onclick = () => {
+    const m = list.find(x => x.id === b.dataset.remove);
+    if (!confirm(`Remove ${m.email} from this workspace?`)) return;
+    S.api.team("remove", { uid: m.id }).then(() => { toast("Removed"); renderMembers(); }, x => toast(x.message, 5000));
+  }));
 }
 
 /* =========================================================== WIRING */
@@ -556,10 +572,16 @@ function wireUI() {
     await S.api.remove("brands", id); };
 
   // Team
+  const genPw = () => Array.from(crypto.getRandomValues(new Uint8Array(10)), b => "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"[b % 55]).join("");
+  $("#invite-form").password.value = genPw();
   $("#invite-form").onsubmit = async e => { e.preventDefault();
-    try { await S.api.invite(e.target.email.value, e.target.role.value);
-      $("#invite-msg").textContent = `Invite saved. Ask ${e.target.email.value} to sign up with that email — they'll be offered to join.`; e.target.reset(); }
-    catch (x) { $("#invite-msg").textContent = x.message; } };
+    const f = e.target, v = Object.fromEntries(new FormData(f));
+    $("#invite-msg").textContent = "";
+    try {
+      const r = await busy(e.submitter, "Adding…", () => S.api.team("add", v));
+      $("#invite-msg").innerHTML = `✔ Added. Send this to ${esc(v.email)}:<br><code style="white-space:pre-wrap">${esc(location.origin)}\nEmail: ${esc(v.email)}${r.created ? `\nPassword: ${esc(v.password)}` : "\n(they already had a login — use their existing password)"}</code>`;
+      f.reset(); f.password.value = genPw(); renderMembers();
+    } catch (x) { $("#invite-msg").textContent = x.message; } };
 
   $("#clear-btn").onclick = async () => { if (prompt('Type DELETE to remove every store and brand in this workspace.') !== "DELETE") return;
     await S.api.clearAll(); S.selectedId = null; toast("Workspace cleared"); };
@@ -592,12 +614,59 @@ function wireUI() {
   $("#export-menu").onclick = e => { const b = e.target.closest("button[data-fmt]"); if (b) exportMap(b.dataset.fmt, +b.dataset.size); };
 }
 
+/* =========================================================== VERIFICATION BADGE */
+// Accounts are verified manually by the platform admin (no automatic email). Until then, show a badge.
+async function checkVerified() {
+  if (S.api.mode === "demo") return;
+  const ok = await S.api.isVerified();
+  $("#unverified-badge").hidden = ok;
+  if (!ok) $("#unverified-badge").onclick = () => toast("Your account is awaiting verification by the StoreRadar team. Contact us to speed it up.", 5000);
+}
+
+/* =========================================================== BUSINESS PROFILE */
+const REQUIRED = ["contactName", "jobTitle", "phone", "contactEmail", "industry"];
+
+/** Workspaces created before the business form existed (or with gaps) are asked to complete it once. */
+async function checkProfile() {
+  S.lastProfileCheck = Date.now();
+  if (S.api.mode === "demo") return;
+  if (!isAdmin()) return checkProfileBanner();
+  let org;
+  try { org = await S.api.loadOrgDoc(); } catch { return; }
+  const p = org.profile || {};
+  if (REQUIRED.every(k => String(p[k] ?? "").trim())) return;
+  const f = $("#profile-form"), d = $("#profile-dialog");
+  for (const el of f.elements) if (el.name && el.name in p) el.value = Array.isArray(p[el.name]) ? p[el.name].join(", ") : p[el.name] ?? "";
+  if (!f.contactEmail.value) f.contactEmail.value = S.api.user?.email || "";
+  d.addEventListener("cancel", e => e.preventDefault());            // required: Esc can't skip it
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const v = Object.fromEntries(new FormData(f));
+    const list = x => String(x || "").split(",").map(t => t.trim()).filter(Boolean).slice(0, 20);
+    const profile = { ...p, contactName: v.contactName.trim(), jobTitle: v.jobTitle.trim(), phone: v.phone.trim(), contactEmail: v.contactEmail.trim(),
+      industry: v.industry, branches: +v.branches || 0, cities: list(v.cities), website: v.website.trim(), competitors: list(v.competitors) };
+    try { await busy(e.submitter, "Saving…", () => S.api.saveProfile(profile)); d.close(); toast("Business details saved"); }
+    catch (x) { $("#profile-error").textContent = x.message; }
+  };
+  d.showModal();
+}
+
+// Members who can't edit the profile still see a reminder banner so they nudge their owner.
+async function checkProfileBanner() {
+  let org; try { org = await S.api.loadOrgDoc(); } catch { return; }
+  const p = org.profile || {};
+  if (REQUIRED.every(k => String(p[k] ?? "").trim()) || S.api.org.status === "hold") return;
+  $("#status-banner").hidden = false;
+  $("#status-banner").textContent = "Your workspace's business details are incomplete — please ask the workspace owner to complete them.";
+}
+
 /* =========================================================== AI (bring your own key) */
 async function renderAISettings() {
   const f = $("#ai-form");
   f.provider.innerHTML = Object.entries(PROVIDERS).map(([k, p]) => `<option value="${k}">${p.label}</option>`).join("");
   let cfg = {};
   try { cfg = await S.api.getAISettings(); } catch {}
+  S.aiCfg = cfg;
   const setModels = () => {
     const p = PROVIDERS[f.provider.value];
     $("#ai-models").innerHTML = p.models.map(m => `<option value="${m}">`).join("");
@@ -608,8 +677,49 @@ async function renderAISettings() {
   f.key.value = "";
   f.key.placeholder = cfg.keyHint ? `Saved key ${cfg.keyHint} — paste a new one to replace` : "Paste your API key";
   f.provider.onchange = () => { setModels(); f.model.value = PROVIDERS[f.provider.value].models[0]; };
-  $("#ai-view").textContent = cfg.provider ? `Connected: ${PROVIDERS[cfg.provider]?.label} · ${cfg.model}${cfg.keyHint ? " · key " + cfg.keyHint : ""}` : "No AI connected yet.";
-  f.hidden = !isAdmin() && S.api.mode !== "demo";
+  $("#ai-view").textContent = cfg.provider ? `Connected: ${PROVIDERS[cfg.provider]?.label} · ${cfg.model}${cfg.keyHint ? " · key " + cfg.keyHint : ""}` : "No key saved yet.";
+
+  const demo = S.api.mode === "demo";
+  const mode = demo ? "own" : cfg.mode || (cfg.provider ? "own" : "platform");   // same default as the server
+  document.querySelectorAll('input[name="ai-mode"]').forEach(r => { r.checked = r.value === mode; r.disabled = !isAdmin() || (demo && r.value === "platform"); });
+  $("#ai-platform").hidden = mode !== "platform";
+  f.hidden = mode !== "own" || (!isAdmin() && !demo);
+  if (mode === "platform") renderCredits();
+}
+
+async function renderCredits() {
+  let c;
+  try { c = await S.api.getCredits(); } catch (x) { $("#credit-balance").textContent = "—"; $("#ai-offers").textContent = x.message; return; }
+  if (!c) return;
+  const mmk = n => `${Math.round(n || 0).toLocaleString("en-US")} MMK`;
+  $("#credit-balance").textContent = mmk(c.balance);
+  $("#credit-balance").style.color = c.balance <= 0 ? "var(--danger)" : "";
+  // AI options offered by StoreRadar — the workspace picks one (each has its own price)
+  const offers = (Array.isArray(c.pricing?.offers) ? c.pricing.offers : Object.entries(c.pricing?.offers || {}).map(([k, o]) => ({ id: k, ...o })))
+    .filter(o => o.enabled);
+  const cfg = S.aiCfg || {};
+  const chosen = offers.find(o => o.id === cfg.platformProvider)?.id || offers.find(o => o.id === c.pricing?.defaultProvider)?.id || offers[0]?.id;
+  $("#ai-offers").innerHTML = offers.length ? offers.map(o => `<label class="ai-mode"><input type="radio" name="ai-offer" value="${esc(o.id)}" ${o.id === chosen ? "checked" : ""} ${isAdmin() ? "" : "disabled"} />
+      <span><b>${esc(o.label)}</b><br><span class="muted small">AI insight ${mmk(o.prices?.insight)} · branch search ${mmk(o.prices?.branches)} per use</span></span></label>`).join("") +
+      '<p class="muted small">Charged only when the AI answers.</p>'
+    : '<p class="muted small">StoreRadar AI options will appear here soon.</p>';
+  $("#ai-offers").querySelectorAll('input[name="ai-offer"]').forEach(r => (r.onchange = () =>
+    S.api.saveAISettings({ platformProvider: r.value }).then(() => { S.aiCfg = { ...cfg, platformProvider: r.value }; toast(`Using ${offers.find(o => o.id === r.value)?.label}`); }, x => toast(x.message, 5000))));
+  const pkgs = c.pricing?.packages?.length ? c.pricing.packages : [{ name: "Starter", mmk: 50000 }, { name: "Growth", mmk: 150000 }];
+  $("#credit-packages").innerHTML = isAdmin()
+    ? pkgs.map((p, i) => `<div class="pkg"><span><b>${esc(p.name)}</b> · ${mmk(p.mmk)}</span><button class="btn sm" data-pkg="${i}">Request top-up</button></div>`).join("")
+    : '<p class="muted small">Ask your workspace owner to top up credits.</p>';
+  $("#credit-contact").textContent = c.pricing?.contact || "After requesting, pay by KBZPay / WavePay and send the receipt to your StoreRadar contact. Credits are added once payment is confirmed.";
+  $("#credit-pending").innerHTML = c.pending.length
+    ? `<p class="small"><span class="pill pending">pending</span> Top-up requested: ${c.pending.map(r => `${esc(r.package)} (${mmk(r.mmk)})`).join(", ")} — waiting for payment confirmation.</p>` : "";
+  $("#credit-log").innerHTML = c.log.length
+    ? c.log.map(l => `<tr><td>${l.at?.toDate ? l.at.toDate().toLocaleDateString("en-GB") : ""}</td><td>${esc(l.type === "charge" ? "AI " + (l.task || "") : l.type === "topup" ? "Top-up" : "Adjustment")}</td><td>${l.amount > 0 ? "+" : ""}${Math.round(l.amount).toLocaleString("en-US")}</td><td>${Math.round(l.balanceAfter).toLocaleString("en-US")}</td></tr>`).join("")
+    : '<tr><td class="muted">No credit activity yet.</td></tr>';
+  $("#credit-packages").querySelectorAll("[data-pkg]").forEach(b => (b.onclick = async () => {
+    const p = pkgs[+b.dataset.pkg];
+    try { await busy(b, "Sending…", () => S.api.requestTopup(p)); toast(`Top-up request for ${p.name} sent. Please pay and send the receipt.`, 5000); renderCredits(); }
+    catch (x) { toast(x.message, 5000); }
+  }));
 }
 
 function wireAI() {
@@ -623,9 +733,13 @@ function wireAI() {
   };
   $("#ai-test").onclick = async e => {
     msg("");
-    try { const r = await busy(e.target, "Testing…", () => S.api.ai("test")); msg(`✔ Working — model replied "${r.reply}"`); }
+    try { const r = await busy(e.target, "Testing…", () => S.api.ai("test")); msg(`✔ Working (${r.mode === "platform" ? "StoreRadar AI" : "your key"}) — model replied "${r.reply}"`); }
     catch (x) { msg("✖ " + x.message); }
   };
+  document.querySelectorAll('input[name="ai-mode"]').forEach(r => (r.onchange = async () => {
+    msg("");
+    try { await S.api.saveAISettings({ mode: r.value }); renderAISettings(); } catch (x) { msg(x.message); }
+  }));
 
   $("#ai-find-form").onsubmit = async e => {
     e.preventDefault();
@@ -633,6 +747,7 @@ function wireAI() {
     $("#ai-find-error").textContent = ""; $("#ai-find-results").innerHTML = "";
     try {
       const r = await busy(e.submitter, "AI is searching (≈30–90 s)…", () => S.api.ai("branches", { brand: fd.get("brand"), area: fd.get("area") }));
+      if (r.charged) toast(`Charged ${r.charged.toLocaleString("en-US")} MMK · balance ${Math.round(r.balance).toLocaleString("en-US")} MMK`, 4000);
       S.aiBrand = fd.get("brand").trim();
       S.aiFound = (r.items || []).filter(i => i && (i.name || i.address)).map(i => {
         let lat = +i.lat, lng = +i.lng;
@@ -698,6 +813,7 @@ async function runInsight(s, nb, sum, pop, btn) {
   out.innerHTML = "";
   try {
     const r = await busy(btn, "Thinking…", () => S.api.ai("insight", { stats, lang: $("#ai-lang").value }));
+    if (r.charged) toast(`Charged ${r.charged.toLocaleString("en-US")} MMK · balance ${Math.round(r.balance).toLocaleString("en-US")} MMK`, 4000);
     out.innerHTML = `<div class="ai-out">${esc(r.text)}</div><div class="row gap" style="margin-top:6px"><button class="btn sm ghost" id="ai-copy">Copy</button></div>`;
     $("#ai-copy").onclick = () => navigator.clipboard.writeText(r.text).then(() => toast("Copied"));
   } catch (x) { out.innerHTML = `<p class="error">${esc(x.message)}</p>`; }

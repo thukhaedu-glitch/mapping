@@ -168,3 +168,12 @@ img.mark { border-radius: 50%; object-fit: contain; background: #fff; border: 2p
 .ai-src a { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result input.maps { font-size: 12px; padding: 4px 6px; margin-top: 4px; }
 .result .src { font-size: 11px; }
+.badge.unverified { background: #fee2e2; color: #991b1b; cursor: help; }
+
+.ai-modes { display: flex; flex-direction: column; gap: 6px; }
+.ai-mode { flex-direction: row !important; align-items: flex-start; gap: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; cursor: pointer; color: var(--text); font-size: 13px; }
+.ai-mode:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+.ai-mode input { margin-top: 3px; }
+.credit-card { background: var(--surface-2); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
+.credit-card b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.pkg { display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; }

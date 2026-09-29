@@ -3,8 +3,12 @@
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue } from "firebase-admin/firestore";
 import { handle, db, HttpError, adminApp } from "./_lib.js";
+import { getPricing, platformAI, adjust, GATEWAYS } from "./_credits.js";
+import * as members from "./_members.js";
 
 const STATUSES = ["active", "hold", "blocked"], PLANS = ["free", "pro", "business"];
+
+const superAdmins = () => (process.env.SUPER_ADMIN_EMAILS || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
 
 async function requireSuperAdmin(req) {
   const token = (req.headers.authorization || "").replace(/^Bearer /, "");
@@ -12,7 +16,7 @@ async function requireSuperAdmin(req) {
   const auth = getAuth(adminApp());
   let u;
   try { u = await auth.verifyIdToken(token, true); } catch { throw new HttpError(401, "Session expired — sign in again."); }
-  const allowed = (process.env.SUPER_ADMIN_EMAILS || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  const allowed = superAdmins();
   if (!allowed.length) throw new HttpError(500, "SUPER_ADMIN_EMAILS env var is not set on the server.");
   if (!allowed.includes((u.email || "").toLowerCase())) throw new HttpError(403, "Not a platform admin.");
   if (!u.email_verified) throw new HttpError(403, "Your admin email is not verified — sign in with Google or verify the email first.");
@@ -26,22 +30,71 @@ const log = (admin, action, target, extra = {}) =>
 async function orgSummary(doc) {
   const ref = doc.ref, d = doc.data();
   const month = new Date().toISOString().slice(0, 7);
-  const [members, stores, brands, usage] = await Promise.all([
+  const [members, stores, brands, usage, owner, billing, aiSettings, requests] = await Promise.all([
     ref.collection("members").get(), ref.collection("stores").count().get(), ref.collection("brands").count().get(), ref.collection("usage").doc(month).get(),
+    d.ownerUid ? db().doc(`users/${d.ownerUid}`).get() : null,
+    ref.collection("billing").doc("ai").get(), ref.collection("settings").doc("ai").get(),
+    ref.collection("topupRequests").where("status", "==", "pending").get(),
   ]);
   return {
     id: doc.id, name: d.name, plan: d.plan || "free", status: d.status || "active", ownerEmail: d.ownerEmail || "",
     profile: d.profile || {}, createdAt: ts(d.createdAt), statusNote: d.statusNote || "",
     members: members.docs.map(m => ({ uid: m.id, email: m.data().email, role: m.data().role })),
     stores: stores.data().count, brands: brands.data().count, usage: usage.data() || {},
+    // false = the owner's account points at a different workspace (e.g. a duplicate created by double-clicking)
+    inUse: owner?.exists ? owner.data().orgId === doc.id : false,
+    credits: billing.data()?.balance || 0, aiMode: aiSettings.data()?.mode || "own",
+    requests: requests.docs.map(r => ({ id: r.id, ...r.data(), at: ts(r.data().at) })),
   };
 }
 
 const actions = {
   async overview() {
-    const snap = await db().collection("orgs").get();
+    const [snap, pricing] = await Promise.all([db().collection("orgs").get(), getPricing()]);
     const orgs = await Promise.all(snap.docs.map(orgSummary));
-    return { orgs: orgs.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))) };
+    const p = platformAI();
+    return {
+      orgs: orgs.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))),
+      pricing, platformAI: p,
+    };
+  },
+
+  async setPricing(admin, { pricing }) {
+    const seen = new Set();
+    const offers = (pricing?.offers || []).slice(0, 8).map(o => ({
+      id: String(o.id || o.label || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 30),
+      label: String(o.label || "").slice(0, 40), via: GATEWAYS.includes(o.via) ? o.via : "gemini", model: String(o.model || "").slice(0, 80),
+      enabled: !!o.enabled, prices: { insight: Math.max(0, Math.round(+o.prices?.insight || 0)), branches: Math.max(0, Math.round(+o.prices?.branches || 0)) },
+    })).filter(o => o.id && o.label && o.model && !seen.has(o.id) && seen.add(o.id));
+    if (!offers.length) throw new HttpError(400, "Add at least one AI option (name + model).");
+    const packages = (pricing?.packages || []).slice(0, 10).map(x => ({ name: String(x.name).slice(0, 40), mmk: Math.max(0, Math.round(+x.mmk || 0)) })).filter(x => x.name && x.mmk);
+    const def = offers.find(o => o.id === pricing?.defaultProvider && o.enabled) || offers.find(o => o.enabled) || offers[0];
+    await db().doc("platform/pricing").set({ offers, defaultProvider: def.id, packages, contact: String(pricing?.contact || "").slice(0, 500) });
+    await log(admin, "setPricing", "platform");
+    return { ok: true };
+  },
+
+  async topUp(admin, { orgId, amount, note, requestId }) {
+    amount = Math.round(+amount);
+    if (!amount || Math.abs(amount) > 100000000) throw new HttpError(400, "Enter an amount in MMK (negative to deduct).");
+    const bal = await adjust(orgId, amount, { type: amount > 0 ? "topup" : "adjust", by: admin.email, note: String(note || "").slice(0, 200) });
+    if (requestId) await db().doc(`orgs/${orgId}/topupRequests/${requestId}`).update({ status: "done", doneBy: admin.email, doneAt: FieldValue.serverTimestamp(), credited: amount });
+    await log(admin, "topUp", orgId, { amount });
+    return { ok: true, balance: bal };
+  },
+
+  async dismissRequest(admin, { orgId, requestId }) {
+    await db().doc(`orgs/${orgId}/topupRequests/${requestId}`).update({ status: "dismissed", doneBy: admin.email, doneAt: FieldValue.serverTimestamp() });
+    return { ok: true };
+  },
+
+  addMember: (admin, b) => members.addMember(admin, b),
+  setMemberRole: (admin, b) => members.setMemberRole(admin, b),
+  removeMember: (admin, b) => members.removeMember(admin, b),
+
+  async creditLog(admin, { orgId }) {
+    const snap = await db().collection(`orgs/${orgId}/creditLog`).orderBy("at", "desc").limit(50).get();
+    return { log: snap.docs.map(d => ({ ...d.data(), at: ts(d.data().at) })) };
   },
 
   async users() {
@@ -52,13 +105,17 @@ const actions = {
       page = await auth.listUsers(1000, page?.pageToken);
       out.push(...page.users);
     } while (page.pageToken && out.length < 10000);
+    // Platform admins are not clients — keep them out of the list
+    const admins = superAdmins();
+    const clients = out.filter(u => !admins.includes((u.email || "").toLowerCase()));
+    out.length = 0; out.push(...clients);
     const profiles = await db().getAll(...out.map(u => db().doc(`users/${u.uid}`)).slice(0, 10000)).catch(() => []);
     const orgOf = Object.fromEntries(profiles.filter(p => p.exists).map(p => [p.id, p.data().orgId]));
     return {
       users: out.map(u => ({
         uid: u.uid, email: u.email || "", name: u.displayName || "", disabled: u.disabled, verified: u.emailVerified,
         providers: u.providerData.map(p => p.providerId), created: u.metadata.creationTime, lastSignIn: u.metadata.lastSignInTime,
-        orgId: orgOf[u.uid] || null,
+        orgId: orgOf[u.uid] || null, superAdmin: superAdmins().includes((u.email || "").toLowerCase()),
       })),
     };
   },
@@ -97,6 +154,21 @@ const actions = {
     const link = await getAuth(adminApp()).generatePasswordResetLink(email);
     await log(admin, "resetLink", email);
     return { link };
+  },
+
+  async verifyUser(admin, { uid }) {
+    await getAuth(adminApp()).updateUser(uid, { emailVerified: true });
+    await log(admin, "verifyUser", uid);
+    return { ok: true };
+  },
+
+  async setProfile(admin, { orgId, profile }) {
+    const keys = ["contactName", "jobTitle", "phone", "contactEmail", "industry", "branches", "country", "cities", "website", "competitors", "goal"];
+    const clean = {};
+    for (const k of keys) if (profile?.[k] !== undefined) clean[k] = Array.isArray(profile[k]) ? profile[k].slice(0, 20).map(String) : k === "branches" ? +profile[k] || 0 : String(profile[k]).slice(0, 300);
+    await db().doc(`orgs/${orgId}`).set({ profile: clean }, { merge: true });
+    await log(admin, "setProfile", orgId);
+    return { ok: true };
   },
 
   async setPassword(admin, { uid, password }) {

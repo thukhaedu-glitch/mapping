@@ -31,3 +31,14 @@
 .admin-table .btn { padding: 3px 8px; font-size: 12px; }
 .linkbox { font-family: ui-monospace, monospace; font-size: 11.5px; word-break: break-all; background: var(--surface-2); padding: 8px; border-radius: 6px; }
 @media (max-width: 700px) { .admin-table { font-size: 12px; } }
+.st.unused { background: #e5e7eb; color: #374151; }
+.st.super { background: #111; color: #fff; }
+#tab-biz td { white-space: normal; min-width: 80px; }
+.members-edit { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; border-top: 1px dashed var(--border); padding-top: 10px; }
+.mrow { display: inline-flex; gap: 6px; align-items: center; background: var(--surface-2); border-radius: 8px; padding: 3px 4px 3px 10px; font-size: 12.5px; }
+.mrow select { width: auto; padding: 3px 6px; font-size: 12px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+#tab-credits .org { gap: 12px; }
+.linkbox { white-space: pre-wrap; }
+.route-table input, .route-table select { padding: 5px 8px; font-size: 13px; }
+.route-table td:first-child { white-space: nowrap; font-weight: 500; }

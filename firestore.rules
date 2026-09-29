@@ -29,6 +29,12 @@ service cloud.firestore {
         && request.resource.data.role in ['admin', 'editor', 'viewer'];
     }
 
+    // Platform-wide settings (AI prices, credit packages, payment contact) — readable by any signed-in user
+    match /platform/{doc} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     match /orgs/{orgId} {
       allow read: if canRead(orgId);
       allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid
@@ -75,6 +81,24 @@ service cloud.firestore {
       match /secrets/{id} {
         allow read: if false;
         allow write: if isAdmin(orgId) && request.resource.data.key is string && request.resource.data.key.size() < 400;
+      }
+
+      // AI credits (MMK) — balance + ledger are written only by the server
+      match /billing/{id} {
+        allow read: if canRead(orgId);
+        allow write: if false;
+      }
+      match /creditLog/{id} {
+        allow read: if canRead(orgId);
+        allow write: if false;
+      }
+      // Top-up requests: workspace admins ask, the platform admin approves (server-side)
+      match /topupRequests/{id} {
+        allow read: if canRead(orgId);
+        allow create: if isAdmin(orgId) && request.resource.data.status == 'pending'
+          && request.resource.data.mmk is number && request.resource.data.mmk > 0 && request.resource.data.mmk <= 100000000
+          && request.resource.data.keys().hasOnly(['status', 'mmk', 'package', 'note', 'by', 'at']);
+        allow update, delete: if false;
       }
 
       // Written only by the server (Admin SDK) — usage metering for billing/quotas

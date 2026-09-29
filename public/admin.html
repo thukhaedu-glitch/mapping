@@ -16,12 +16,11 @@
   <div id="login" class="overlay" hidden>
     <div class="auth-card">
       <div class="logo"><span class="dot"></span>StoreRadar <span class="badge">Admin</span></div>
-      <p class="muted small">Platform admin only. Sign in with Google (recommended — your email must be verified).</p>
-      <button class="btn primary full" id="google">Sign in with Google</button>
+      <p class="muted small">Platform admin only.</p>
       <form id="pw-form" class="stack">
         <label>Email<input name="email" type="email" required autocomplete="email" /></label>
         <label>Password<input name="password" type="password" required autocomplete="current-password" /></label>
-        <button class="btn full">Sign in with password</button>
+        <button class="btn primary full">Sign in</button>
         <button class="link small" type="button" id="forgot">Forgot password?</button>
       </form>
       <div id="verify-box" class="stack" hidden>
@@ -47,6 +46,8 @@
 
       <nav class="tabs admin-tabs">
         <button class="tab active" data-tab="orgs">Workspaces</button>
+        <button class="tab" data-tab="biz">Business</button>
+        <button class="tab" data-tab="credits">AI &amp; Credits</button>
         <button class="tab" data-tab="users">Users</button>
       </nav>
 
@@ -58,6 +59,32 @@
           <button class="btn sm ghost" id="export-orgs">Export CSV</button>
         </div>
         <div id="orgs"></div>
+      </section>
+
+      <section id="tab-biz" hidden>
+        <div class="row gap wrap toolbar">
+          <input class="search" id="biz-q" placeholder="Search company, contact, phone, email, city…" />
+          <button class="btn sm ghost" id="export-biz">Export CSV</button>
+        </div>
+        <div class="table-wrap"><table id="biz" class="admin-table"></table></div>
+      </section>
+
+      <section id="tab-credits" hidden class="stack">
+        <div class="org"><h3>Top-up requests</h3><div id="requests"></div></div>
+        <form class="org stack" id="pricing-form">
+          <h3>StoreRadar AI pricing</h3>
+          <p class="muted small" id="platform-ai-status"></p>
+          <p class="muted small">AI options clients can choose from. Each option uses one of your keys (gateway), a model and its own price. With <b>OpenRouter</b> or <b>fal</b> one key covers Claude, Gemini and GPT — use model names like <code>anthropic/claude-sonnet-5.5</code>, <code>google/gemini-3.8-flash</code>.</p>
+          <div class="table-wrap"><table class="admin-table route-table">
+            <thead><tr><th>On</th><th>Name shown to clients</th><th>Gateway (your key)</th><th>Model</th><th>AI insight (MMK)</th><th>Branch search (MMK)</th><th>Default</th><th></th></tr></thead>
+            <tbody id="offer-rows"></tbody>
+          </table></div>
+          <div class="row"><button type="button" class="btn sm" id="add-offer">+ Add AI option</button></div>
+          <datalist id="platform-models"><option value="claude-sonnet-5-5"><option value="claude-haiku-4-5-20251001"><option value="claude-opus-5-5"><option value="gemini-3.8-flash"><option value="gemini-3.1-flash-lite"><option value="gpt-5.4-mini"><option value="gpt-5.4"><option value="anthropic/claude-sonnet-5.5"><option value="google/gemini-3.8-flash"><option value="openai/gpt-5.4-mini"></datalist>
+          <label>Credit packages — one per line: <code>Name | MMK</code><textarea name="packages" rows="4" placeholder="Starter | 50000"></textarea></label>
+          <label>Payment instructions shown to clients<textarea name="contact" rows="3" placeholder="KBZPay 09xxxxxxx (Name) — send receipt on Viber 09xxxxxxx"></textarea></label>
+          <div class="row"><button class="btn primary">Save pricing</button></div>
+        </form>
       </section>
 
       <section id="tab-users" hidden>

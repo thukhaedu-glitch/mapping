@@ -34,7 +34,9 @@ class DemoBackend {
   async placesSearch() { throw new Error("Google Places search needs the Firebase backend (Cloud Function). Demo mode မှာ မရပါ။"); }
   async popStats() { throw new Error("Browser blocked WorldPop (CORS). Deploy with Firebase Functions, or build the offline grid with tools/build_pop_grid.py."); }
   // Demo: AI key lives only in this browser and is sent straight to the provider.
-  async getAISettings() { try { const a = JSON.parse(localStorage.getItem("sr-demo-ai") || "{}"); return { provider: a.provider, model: a.model, keyHint: a.key ? "…" + a.key.slice(-4) : "" }; } catch { return {}; } }
+  async getAISettings() { try { const a = JSON.parse(localStorage.getItem("sr-demo-ai") || "{}"); return { mode: "own", provider: a.provider, model: a.model, keyHint: a.key ? "…" + a.key.slice(-4) : "" }; } catch { return {}; } }
+  async getCredits() { return null; }                         // StoreRadar AI credits need the real backend
+  async requestTopup() { throw new Error("Not available in demo mode."); }
   async saveAISettings({ provider, model, key }) {
     let a = {}; try { a = JSON.parse(localStorage.getItem("sr-demo-ai") || "{}"); } catch {}
     a = { ...a, provider, model, ...(key ? { key } : {}) };
@@ -49,6 +51,7 @@ class DemoBackend {
   }
   async listMembers() { return [{ id: "demo", email: "demo@local", role: "owner" }]; }
   async invite() { throw new Error("Demo mode မှာ member invite မရပါ။"); }
+  async team() { throw new Error("Adding users needs the real backend (not demo mode)."); }
   async signOut() {}
 }
 
@@ -80,8 +83,8 @@ class FirebaseBackend {
 
   onAuth(cb) { this.m.onAuthStateChanged(this.auth, u => { this.user = u; cb(u); }); }
   signIn(email, pw) { return this.m.signInWithEmailAndPassword(this.auth, email, pw); }
+  // No automatic verification email (Firebase's free email quota is small) — the platform admin marks accounts verified manually.
   signUp(email, pw) { return this.m.createUserWithEmailAndPassword(this.auth, email, pw); }
-  signInGoogle() { return this.m.signInWithPopup(this.auth, new this.m.GoogleAuthProvider()); }
   resetPassword(email) { return this.m.sendPasswordResetEmail(this.auth, email); }
   signOut() { return this.m.signOut(this.auth); }
 
@@ -116,8 +119,16 @@ class FirebaseBackend {
   }
 
   async createOrg(name, profile = {}) {
+    if (this._creating) return this._creating;              // second click while the first is still running
+    this._creating = this._createOrg(name, profile).finally(() => (this._creating = null));
+    return this._creating;
+  }
+  async _createOrg(name, profile) {
     const { doc, collection, setDoc, serverTimestamp } = this.m;
     const u = this.user;
+    // Guard against double-submits / retries: if this account already has a workspace, open it instead
+    const existing = await this.resolveOrg().catch(() => ({}));
+    if (existing.org) return existing;
     const ref = doc(collection(this.fs, "orgs"));
     // Each write depends on the previous one in the security rules (org → owner → profile/brand),
     // so they must be sequential — but the last two run in parallel and we skip re-reading.
@@ -142,6 +153,19 @@ class FirebaseBackend {
     this._saveOrg({ id: invite.orgId, name: invite.orgName, role: invite.role });
     return { org: this.org };
   }
+
+  /** Re-fetch the account so a "Mark verified" done by the platform admin shows up without signing out. */
+  async isVerified() {
+    const u = this.auth.currentUser;
+    if (!u) return true;
+    try { await u.reload(); } catch {}
+    return this.auth.currentUser.emailVerified;
+  }
+  async loadOrgDoc() {
+    const d = await this.m.getDoc(this.m.doc(this.fs, "orgs", this.org.id));
+    return d.exists() ? d.data() : {};
+  }
+  saveProfile(profile) { return this.m.updateDoc(this.m.doc(this.fs, "orgs", this.org.id), { profile }); }
 
   col(name) { return this.m.collection(this.fs, "orgs", this.org.id, name); }
   on(name, cb) {
@@ -187,12 +211,37 @@ class FirebaseBackend {
     return d.exists() ? d.data() : {};
   }
   /** Key goes to a write-only doc (rules: nobody can read it back); only a hint is kept in settings. */
-  async saveAISettings({ provider, model, key }) {
+  async saveAISettings({ mode, provider, model, key, platformProvider }) {
     const { doc, setDoc, serverTimestamp } = this.m;
     if (key) await setDoc(doc(this.fs, "orgs", this.org.id, "secrets", "ai"), { key, updatedAt: serverTimestamp() });
-    const data = { provider, model, updatedBy: this.user.email, updatedAt: serverTimestamp() };
+    const data = { updatedBy: this.user.email, updatedAt: serverTimestamp() };
+    if (mode) data.mode = mode;
+    if (platformProvider) data.platformProvider = platformProvider;
+    if (provider) Object.assign(data, { provider, model });
     if (key) data.keyHint = "…" + key.slice(-4);
     await setDoc(doc(this.fs, "orgs", this.org.id, "settings", "ai"), data, { merge: true });
+  }
+  /** Balance, recent ledger, platform prices/packages and pending top-up requests. */
+  team(action, body) { return this.api("team", { orgId: this.org.id, action, ...body }); }
+
+  async getCredits() {
+    const { doc, getDoc, getDocs, collection, query, orderBy, limit, where } = this.m;
+    const o = this.org.id;
+    const [bill, pricing, log, pending] = await Promise.all([
+      getDoc(doc(this.fs, "orgs", o, "billing", "ai")),
+      getDoc(doc(this.fs, "platform", "pricing")),
+      getDocs(query(collection(this.fs, "orgs", o, "creditLog"), orderBy("at", "desc"), limit(20))),
+      getDocs(query(collection(this.fs, "orgs", o, "topupRequests"), where("status", "==", "pending"))),
+    ]);
+    return {
+      balance: bill.data()?.balance || 0, pricing: pricing.exists() ? pricing.data() : null,
+      log: log.docs.map(d => d.data()), pending: pending.docs.map(d => ({ id: d.id, ...d.data() })),
+    };
+  }
+  requestTopup(pkg) {
+    const { addDoc, collection, serverTimestamp } = this.m;
+    return addDoc(collection(this.fs, "orgs", this.org.id, "topupRequests"),
+      { status: "pending", mmk: pkg.mmk, package: pkg.name, note: "", by: this.user.email, at: serverTimestamp() });
   }
   ai(task, payload = {}) {
     if (!apiBase) throw new Error("AI features need the Vercel API (apiBase = \"/api\").");

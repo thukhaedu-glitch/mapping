@@ -5,6 +5,9 @@ export const PROVIDERS = {
   claude: { label: "Claude (Anthropic)", keyUrl: "https://console.anthropic.com/settings/keys", models: ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-4-5-20251001"] },
   openai: { label: "ChatGPT (OpenAI)", keyUrl: "https://platform.openai.com/api-keys", models: ["gpt-5.4-mini", "gpt-5.4", "gpt-5"] },
   gemini: { label: "Gemini (Google)", keyUrl: "https://aistudio.google.com/apikey", models: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] },
+  // Gateways: one key, many models (use OpenRouter model slugs like "anthropic/claude-sonnet-5.5")
+  openrouter: { label: "OpenRouter (one key, all models)", keyUrl: "https://openrouter.ai/keys", models: ["google/gemini-3.8-flash", "anthropic/claude-sonnet-5.5", "openai/gpt-5.4-mini"] },
+  fal: { label: "fal (one key, all models)", keyUrl: "https://fal.ai/dashboard/keys", models: ["google/gemini-3.8-flash", "anthropic/claude-sonnet-5.5", "openai/gpt-5.4-mini"] },
 };
 
 /**
@@ -19,6 +22,8 @@ export async function callAI(o) {
   if (o.provider === "claude") return claude({ ...o, model });
   if (o.provider === "openai") return openai({ ...o, model });
   if (o.provider === "gemini") return gemini({ ...o, model });
+  if (o.provider === "openrouter") return chatCompat({ ...o, model, url: "https://openrouter.ai/api/v1/chat/completions", auth: `Bearer ${o.key}` });
+  if (o.provider === "fal") return chatCompat({ ...o, model, url: "https://fal.run/openrouter/router/openai/v1/chat/completions", auth: `Key ${o.key}` });
   throw new Error("Unknown AI provider");
 }
 
@@ -77,6 +82,19 @@ async function gemini({ key, model, system, prompt, web }) {
   const text = (cand?.content?.parts || []).map(p => p.text || "").join("");
   const sources = (cand?.groundingMetadata?.groundingChunks || []).map(c => c.web).filter(Boolean).map(w => ({ title: w.title || w.uri, url: w.uri }));
   if (!text) throw new Error(cand?.finishReason ? `Gemini stopped: ${cand.finishReason}` : "Gemini returned no text");
+  return { text, sources: dedupe(sources) };
+}
+
+// OpenAI chat-completions compatible gateways. Web search uses OpenRouter's web plugin
+// (the model's native search for Claude/Gemini/OpenAI). Through fal the plugin may be ignored — then no live web search.
+async function chatCompat({ url, auth, model, system, prompt, web }) {
+  const body = { model, messages: [...(system ? [{ role: "system", content: system }] : []), { role: "user", content: prompt }] };
+  if (web) body.plugins = [{ id: "web", max_results: 6 }];
+  const j = await post(url, { Authorization: auth }, body);
+  const msg = j.choices?.[0]?.message || {};
+  const text = typeof msg.content === "string" ? msg.content : (msg.content || []).map(c => c.text || "").join("");
+  const sources = (msg.annotations || []).map(a => a.url_citation || a).filter(a => a?.url).map(a => ({ title: a.title || a.url, url: a.url }));
+  if (!text) throw new Error("The AI gateway returned no text");
   return { text, sources: dedupe(sources) };
 }
 
