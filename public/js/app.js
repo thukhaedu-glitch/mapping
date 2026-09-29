@@ -1,5 +1,5 @@
 import { createBackend, hasFirebase } from "./data.js";
-import { distance, fmtDist, fmtNum, neighbours, radiusSummary, loadPopGrid, popGridInfo, populationWithin, poiCounts, POI_GROUPS, matchBrand, worldpopDirect, WORLDPOP_YEAR, roadRoute, fmtDur } from "./analysis.js";
+import { distance, fmtDist, fmtNum, neighbours, radiusSummary, loadPopGrid, popGridInfo, populationWithin, poiCounts, poiList, POI_GROUPS, matchBrand, worldpopDirect, WORLDPOP_YEAR, roadRoute, fmtDur } from "./analysis.js";
 import { TILES } from "./tiles.js";
 import { PROVIDERS } from "./ai-core.js";
 import { DIVISIONS, divisionOf } from "./myanmar.js";
@@ -277,7 +277,7 @@ function selectStore(id, pan = true) {
 function renderDetail() {
   const el = $("#detail");
   const s = S.stores.find(x => x.id === S.selectedId);
-  if (!s) { el.hidden = true; return; }
+  if (!s) { el.hidden = true; if (S.poiShown) clearPoi(); return; }
   el.hidden = false;
   const b = S.brandsById[s.brandId] || {};
   const nb = neighbours(s, S.stores.filter(x => x.status !== "closed"), S.brandsById);
@@ -337,7 +337,7 @@ function renderDetail() {
       <div id="ai-insight"></div>
     </div>`;
 
-  $("#d-close").onclick = () => { S.selectedId = null; renderAll(); };
+  $("#d-close").onclick = () => { S.selectedId = null; clearPoi(); renderAll(); };
   $("#d-radius").onchange = e => setRadius(+e.target.value);
   $("#d-edit") && ($("#d-edit").onclick = () => openStoreDialog(s));
   $("#d-verify") && ($("#d-verify").onclick = () => S.api.update("stores", s.id, { status: "verified" }).then(() => toast("Marked verified")));
@@ -348,14 +348,63 @@ function renderDetail() {
     if (other) addMeasure(s, other, true);
   }));
   $("#d-ai").onclick = e => runInsight(s, nb, sum, pop, e.target);
-  $("#d-poi").onclick = async e => {
+  if (S.poiShown && (S.poiShown.id !== s.id || S.poiShown.radius !== S.radius)) clearPoi();
+  const showCounts = c => {
+    $("#d-poi").outerHTML = `<dl class="kv poi-kv">${POI_GROUPS.map(([k, label]) => `<dt>${label}</dt><dd><button class="link poi-show ${S.poiShown?.key === k ? "on" : ""}" data-poi="${k}" title="Show each one on the map and list them" ${c[k] ? "" : "disabled"}>${fmtNum(c[k])}${c[k] ? " · show" : ""}</button></dd>`).join("")}</dl><div id="poi-list"></div>`;
+    $("#poi-box").querySelectorAll("[data-poi]").forEach(btn => (btn.onclick = () => showPoi(s, btn.dataset.poi, btn)));
+    if (S.poiShown) renderPoiList();
+  };
+  if (S.lastPoi?.id === s.id && S.lastPoi.radius === S.radius) showCounts(S.lastPoi.counts);
+  else $("#d-poi").onclick = async e => {
     e.target.disabled = true; e.target.textContent = "Loading…";
     try {
       const c = await poiCounts(s, S.radius);
       S.lastPoi = { id: s.id, radius: S.radius, counts: c };
-      $("#poi-box").querySelector("button").outerHTML = `<dl class="kv">${POI_GROUPS.map(([k, label]) => `<dt>${label}</dt><dd>${fmtNum(c[k])}</dd>`).join("")}</dl>`;
+      showCounts(c);
     } catch (x) { e.target.disabled = false; e.target.textContent = "Retry"; toast(x.message, 4000); }
   };
+}
+
+/* ---- Area activity: show the actual places behind a count */
+const POI_COLORS = { offices: "#2563eb", education: "#9333ea", health: "#dc2626", retail: "#ea580c", market: "#ca8a04", food: "#16a34a", banks: "#0891b2" };
+function clearPoi() {
+  if (S.poiLayer) S.poiLayer.clearLayers();
+  S.poiShown = null;
+  document.querySelectorAll(".poi-show.on").forEach(b => b.classList.remove("on"));
+  const l = $("#poi-list"); if (l) l.innerHTML = "";
+}
+async function showPoi(s, key, btn) {
+  if (S.poiShown?.key === key && S.poiShown.id === s.id) return clearPoi();
+  const old = btn.textContent; btn.disabled = true; btn.textContent = "Loading…";
+  try {
+    const list = await poiList(s, S.radius, key);
+    clearPoi();
+    if (!S.poiLayer) S.poiLayer = L.layerGroup().addTo(S.map);
+    const color = POI_COLORS[key] || "#111";
+    L.circle([s.lat, s.lng], { radius: S.radius, color, weight: 1.5, dashArray: "5 5", fill: false, interactive: false }).addTo(S.poiLayer);
+    list.forEach((p, i) => L.circleMarker([p.lat, p.lng], { radius: 6, color: "#fff", weight: 1.5, fillColor: color, fillOpacity: 0.95 })
+      .bindTooltip(`${i + 1}. ${esc(p.name || "(no name)")}`)
+      .bindPopup(`<b>${i + 1}. ${esc(p.name || "(no name on OSM)")}</b>${p.nameAlt ? `<br>${esc(p.nameAlt)}` : ""}<br><span class="muted small">${esc(p.kind)} · ${fmtDist(p.d)} away</span><br><a href="${p.url}" target="_blank" rel="noopener">View on OpenStreetMap ↗</a>`)
+      .addTo(S.poiLayer));
+    S.poiShown = { id: s.id, radius: S.radius, key, list };
+    S.map.fitBounds(L.latLng(s.lat, s.lng).toBounds(S.radius * 2.2));
+    renderPoiList();
+    btn.classList.add("on");
+  } catch (x) { toast(x.message, 4000); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+function renderPoiList() {
+  const box = $("#poi-list"), sh = S.poiShown; if (!box || !sh) return;
+  const label = POI_GROUPS.find(g => g[0] === sh.key)?.[1] || sh.key;
+  const named = sh.list.filter(p => p.name).length;
+  box.innerHTML = `<div class="row between small" style="margin-top:8px"><b>${label}: ${sh.list.length} on map</b><button class="link small" id="poi-hide">Hide dots</button></div>
+    <p class="muted small">${named} named · ${sh.list.length - named} without a name on OSM. Click a row to zoom to it; the OSM link shows who mapped it.</p>
+    <ol class="poi-items">${sh.list.map((p, i) => `<li data-i="${i}"><span><b class="muted">${i + 1}.</b> ${esc(p.name || "(no name)")} <span class="muted">${esc(p.kind)}</span></span><span class="muted">${fmtDist(p.d)}</span></li>`).join("")}</ol>`;
+  $("#poi-hide").onclick = clearPoi;
+  box.querySelectorAll("li[data-i]").forEach(li => (li.onclick = () => {
+    const p = sh.list[+li.dataset.i]; S.map.setView([p.lat, p.lng], Math.max(S.map.getZoom(), 17));
+    S.poiLayer.eachLayer(m => { if (m.getLatLng && m.getPopup && m.getLatLng().lat === p.lat && m.getLatLng().lng === p.lng) m.openPopup(); });
+  }));
 }
 
 function renderBrandBars(byBrand) {
@@ -891,15 +940,18 @@ function wireAI() {
     const fd = new FormData(e.target);
     $("#ai-find-error").textContent = ""; $("#ai-find-results").innerHTML = "";
     try {
-      const r = await busy(e.submitter, "AI is searching (≈30–90 s)…", () => S.api.ai("branches", { brand: fd.get("brand"), area: fd.get("area") }));
+      const r = await busy(e.submitter, "AI is searching (1–3 min for a whole country)…", () => S.api.ai("branches", { brand: fd.get("brand"), area: fd.get("area") }));
       if (r.charged) toast(`Charged ${r.charged.toLocaleString("en-US")} MMK · balance ${Math.round(r.balance).toLocaleString("en-US")} MMK`, 4000);
       S.aiBrand = fd.get("brand").trim();
       S.aiFound = (r.items || []).filter(i => i && (i.name || i.address)).map(i => {
         let lat = +i.lat, lng = +i.lng;
-        if (!(isFinite(lat) && isFinite(lng) && lat && lng)) { const c = coordsFromLink(i.mapsUrl); lat = c?.lat; lng = c?.lng; }
-        const has = isFinite(lat) && isFinite(lng);
-        return { ...i, lat: has ? lat : null, lng: has ? lng : null, pick: has, dup: has && S.stores.some(s => distance(s, { lat, lng }) < 40) };
+        let coord = i.coord === "approx" ? "approx" : "source";
+        if (!(isFinite(lat) && isFinite(lng) && lat && lng)) { const c = coordsFromLink(i.mapsUrl); lat = c?.lat; lng = c?.lng; coord = "source"; }
+        // Myanmar bounding box — drops swapped / nonsense coordinates
+        const has = isFinite(lat) && isFinite(lng) && lat > 9 && lat < 29 && lng > 92 && lng < 102;
+        return { ...i, coord: has ? coord : null, lat: has ? lat : null, lng: has ? lng : null, pick: has, dup: has && S.stores.some(s => distance(s, { lat, lng }) < 40) };
       });
+      await geocodeMissing(S.aiFound);
       S.aiSources = r.sources || [];
       renderAIFind();
     } catch (x) { $("#ai-find-error").textContent = x.message; }
@@ -910,15 +962,15 @@ function renderAIFind() {
   const box = $("#ai-find-results"), list = S.aiFound || [];
   if (!list.length) { box.innerHTML = '<p class="muted small">The AI found no branches with a source. Try a different spelling or area.</p>'; return; }
   const existing = S.brands.find(b => [b.name, ...(b.aliases || [])].some(n => n.toLowerCase() === S.aiBrand.toLowerCase()));
-  const placed = list.filter(i => i.lat != null).length;
-  box.innerHTML = `<div class="row between small"><span>${list.length} found · ${placed} with location</span>
+  const placed = list.filter(i => i.lat != null).length, approx = list.filter(i => i.coord && i.coord !== "source").length;
+  box.innerHTML = `<div class="row between small"><span>${list.length} found · ${placed} with location${approx ? ` (${approx} approximate)` : ""}</span>
       <button class="btn sm primary" id="ai-add">Add ticked as pending</button></div>
-    <p class="small muted">Brand: <b>${esc(existing?.name || S.aiBrand)}</b>${existing ? "" : " (will be created)"}. AI results can be wrong — verify each one.</p>` +
+    <p class="small muted">Brand: <b>${esc(existing?.name || S.aiBrand)}</b>${existing ? "" : " (will be created)"}. Added as <b>pending</b> — AI results can be wrong; drag-check the ≈ ones on the map.</p>` +
     list.map((i, k) => `<div class="result ${i.dup ? "dup" : ""}">
       <input type="checkbox" data-k="${k}" ${i.pick && !i.dup ? "checked" : ""} ${i.lat == null || i.dup ? "disabled" : ""} />
       <div class="main"><b>${esc(i.name || "(no name)")}</b>${i.status && i.status !== "open" ? ` <span class="pill">${esc(i.status)}</span>` : ""}
         <div class="muted small">${esc([i.address, i.township, i.city].filter(Boolean).join(", "))}</div>
-        ${i.dup ? '<div class="small muted">Already on map</div>' : i.lat == null ? `<input class="maps" data-maps="${k}" placeholder="Paste Google Maps link to place it" />` : `<div class="small muted">📍 ${i.lat.toFixed(5)}, ${i.lng.toFixed(5)}</div>`}
+        ${i.dup ? '<div class="small muted">Already on map</div>' : i.lat == null ? `<input class="maps" data-maps="${k}" placeholder="Paste Google Maps link to place it" />` : `<div class="small muted">📍 ${i.lat.toFixed(5)}, ${i.lng.toFixed(5)}${i.coord === "approx" ? ' <span class="pill" title="AI placed it at the mall / landmark it is in — check it">≈ approx</span>' : i.coord === "area" ? ' <span class="pill" title="Only the township/area centre is known — paste a Maps link for the exact spot">≈ area only</span>' : ""}</div>`}
         ${i.source ? `<a class="src" href="${esc(i.source)}" target="_blank" rel="noopener">source</a>` : ""}
       </div></div>`).join("") +
     (S.aiSources?.length ? `<div class="ai-src"><b class="muted">Searched:</b>${S.aiSources.map(x => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>`).join("")}</div>` : "");
@@ -934,7 +986,8 @@ function renderAIFind() {
       const brandId = existing?.id || await S.api.add("brands", { name: S.aiBrand, color: randomColor(), isOwn: false, aliases: [] });
       await S.api.bulkAdd("stores", add.map(i => ({
         brandId, name: i.name || `${S.aiBrand} ${i.township || ""}`.trim(), lat: i.lat, lng: i.lng, address: i.address || "",
-        township: i.township || "", city: i.city || "", status: "pending", source: "ai", notes: i.source ? `AI source: ${i.source}` : "AI",
+        township: i.township || "", city: i.city || "", phone: i.phone || "", status: "pending", source: "ai",
+        notes: [i.coord === "approx" ? "Location approximate (AI)" : i.coord === "area" ? "Location = area centre only" : "", i.source ? `AI source: ${i.source}` : "AI"].filter(Boolean).join(" · "),
         sizeSqft: null, seats: null, type: "",
       })));
     });
@@ -1237,4 +1290,21 @@ function wireMapView() {
     else if (e.key === "Escape" && document.body.classList.contains("focus-map")) exitFS();
   });
   addEventListener("resize", () => setPanel(document.body.classList.contains("panel-hidden")));
+}
+
+/** AI branches with no coordinates: place them at their township / city centre (OpenStreetMap), unticked. */
+async function geocodeMissing(list) {
+  const todo = list.filter(i => i.lat == null && (i.township || i.city || i.address)).slice(0, 25);
+  const cache = {};
+  for (const i of todo) {
+    const q = [i.township, i.city].filter(Boolean).join(", ") || i.address;
+    if (!(q in cache)) {
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mm&q=${encodeURIComponent(q)}`);
+        const j = await r.json(); cache[q] = j[0] ? { lat: +j[0].lat, lng: +j[0].lon } : null;
+      } catch { cache[q] = null; }
+      await new Promise(r => setTimeout(r, 1100));        // Nominatim: max 1 request / second
+    }
+    if (cache[q]) Object.assign(i, cache[q], { coord: "area", pick: false });
+  }
 }

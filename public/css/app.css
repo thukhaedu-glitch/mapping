@@ -217,3 +217,12 @@ body.focus-map #panel-btn { display: none; }
   body.focus-map #fullscreen-btn::before { content: "✕  Exit"; font-size: 13px; }
 }
 .layout > * { min-width: 0; }
+
+/* area activity: show the places behind a count */
+.poi-kv dd .poi-show { font: inherit; padding: 0; }
+.poi-kv dd .poi-show.on { font-weight: 700; text-decoration: underline; }
+.poi-kv dd .poi-show:disabled { color: var(--muted); cursor: default; }
+.poi-items { list-style: none; margin: 4px 0 0; padding: 0; max-height: 260px; overflow: auto; font-size: 12.5px; }
+.poi-items li { cursor: pointer; padding: 3px 4px; border-radius: 6px; display: flex; justify-content: space-between; gap: 8px; }
+.poi-items li > span:last-child { flex: none; }
+.poi-items li:hover { background: var(--surface-2); }

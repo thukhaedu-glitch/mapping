@@ -114,6 +114,37 @@ export async function poiCounts(center, radiusM) {
   return counts;
 }
 
+/** The actual places behind one count — so a number like "53 offices" can be checked one by one. */
+const poiListCache = new Map();
+export async function poiList(center, radiusM, groupKey) {
+  const g = POI_GROUPS.find(x => x[0] === groupKey);
+  if (!g) return [];
+  const key = `${center.lat.toFixed(5)},${center.lng.toFixed(5)},${radiusM},${groupKey}`;
+  if (poiListCache.has(key)) return poiListCache.get(key);
+  const q = `[out:json][timeout:25];nwr(around:${Math.round(radiusM)},${center.lat},${center.lng})${g[2]};out center tags;`;
+  const res = await fetch("https://overpass-api.de/api/interpreter", {
+    method: "POST", body: "data=" + encodeURIComponent(q),
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
+  if (!res.ok) throw new Error(`OpenStreetMap (Overpass) error ${res.status} — ခဏနေ ပြန်စမ်းပါ`);
+  const json = await res.json();
+  const t = e => e.tags || {};
+  const list = json.elements.map(e => {
+    const lat = e.lat ?? e.center?.lat, lng = e.lon ?? e.center?.lon;
+    const tags = t(e);
+    const kind = tags.office ? `office: ${tags.office}` : tags.amenity || tags.shop || "";
+    return {
+      lat, lng, kind,
+      name: tags.name || tags["name:en"] || tags["name:my"] || "",
+      nameAlt: tags["name:en"] && tags.name !== tags["name:en"] ? tags["name:en"] : "",
+      url: `https://www.openstreetmap.org/${e.type}/${e.id}`,
+    };
+  }).filter(p => isFinite(p.lat) && isFinite(p.lng))
+    .map(p => ({ ...p, d: distance(center, p) })).sort((a, b) => a.d - b.d);
+  poiListCache.set(key, list);
+  return list;
+}
+
 /* ---------------------------------------------- Brand matching for search results */
 const norm = s => (s || "").toLowerCase().replace(/[^a-z0-9က-႟]+/g, " ").trim();
 
