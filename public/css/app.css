@@ -226,3 +226,16 @@ body.focus-map #panel-btn { display: none; }
 .poi-items li { cursor: pointer; padding: 3px 4px; border-radius: 6px; display: flex; justify-content: space-between; gap: 8px; }
 .poi-items li > span:last-child { flex: none; }
 .poi-items li:hover { background: var(--surface-2); }
+
+/* closed stores */
+.pin.closed { background: #9ca3af !important; opacity: .55; filter: grayscale(1); }
+.pin.logo.closed { opacity: .45; }
+.closed-banner { background: #fee2e2; color: #991b1b; border-radius: 8px; padding: 8px 10px; font-size: 13px; margin: 6px 0; }
+#store-list li.closed .t { text-decoration: line-through; color: var(--muted); }
+.d-actions { margin: 6px 0 4px; flex-wrap: wrap; }
+.btn.danger-ghost { color: #b91c1c; }
+/* my account */
+.user-btn { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#account-dialog { width: min(640px, 94vw); }
+#account-dialog h4 { margin: 8px 0 0; }
+#pw-msg.ok { color: #15803d; } #pw-msg.err { color: #b91c1c; }

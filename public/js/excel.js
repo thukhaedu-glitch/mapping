@@ -5,7 +5,7 @@ export const COLUMNS = [
   ["brand", "Brand"], ["name", "Store name"], ["lat", "Latitude"], ["lng", "Longitude"],
   ["mapsLink", "Google Maps link"], ["address", "Address"], ["township", "Township / Area"], ["city", "City"], ["division", "Division"],
   ["phone", "Phone"], ["rating", "Google rating"], ["ratingCount", "Rating count"], ["placeId", "Google place ID"],
-  ["sizeSqft", "Size (sqft)"], ["seats", "Seats"], ["type", "Type"], ["status", "Status"], ["notes", "Notes"],
+  ["sizeSqft", "Size (sqft)"], ["seats", "Seats"], ["type", "Type"], ["status", "Status"], ["closedAt", "Closed date"], ["closedReason", "Closed reason"], ["notes", "Notes"],
 ];
 
 // header aliases (lower-cased, spaces/punctuation removed) → field
@@ -27,6 +27,8 @@ const ALIAS = {
   seats: ["seats", "seating", "seat", "capacity", "ထိုင်ခုံ"],
   type: ["type", "format", "storetype"],
   status: ["status"],
+  closedAt: ["closeddate", "closedon", "closedat", "dateclosed", "closingdate", "ပိတ်သည့်ရက်"],
+  closedReason: ["closedreason", "closurereason", "reasonclosed", "whyclosed", "ပိတ်ရသည့်အကြောင်း"],
   notes: ["notes", "note", "remark", "remarks", "မှတ်ချက်"],
 };
 const key = s => String(s || "").toLowerCase().replace(/[\s_\-()./]+/g, "");
@@ -70,8 +72,12 @@ export async function parseFile(file) {
       address: get("address"), township: get("township"), city: get("city"), division: get("division"),
       sizeSqft: parseFloat(get("sizeSqft")) || null, seats: parseInt(get("seats")) || null,
       type: get("type"), status: (get("status") || "verified").toLowerCase(), notes: get("notes"),
+      closedAt: (v => { if (!v) return ""; if (/^\d{4,5}(\.\d+)?$/.test(v)) { const d = new Date(Math.round((+v - 25569) * 864e5)); return d.toISOString().slice(0, 10); } return v.slice(0, 10); })(get("closedAt")),
+      closedReason: get("closedReason"),
     };
     if (!row.name && !row.address) return; // blank line
+    if (row.closedAt && row.status !== "closed") row.status = "closed";
+    if (!["verified", "pending", "closed"].includes(row.status)) row.status = /close|shut|ပိတ်/.test(row.status) ? "closed" : /open|active|verified/.test(row.status) ? "verified" : "pending";
     if (!(isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180)) {
       errors.push(`Row ${i + 2} (${row.name || row.address}): no valid Latitude/Longitude or Google Maps link — skipped.`);
       return;
@@ -88,12 +94,12 @@ export function exportStores(stores, brandsById) {
     Brand: brandsById[s.brandId]?.name || "", "Store name": s.name, Latitude: s.lat, Longitude: s.lng,
     Address: s.address || "", Township: s.township || "", City: s.city || "", Division: divisionOf(s),
     Phone: s.phone || "", "Google rating": s.rating ?? "", "Rating count": s.ratingCount ?? "", "Google place ID": s.placeId || "",
-    "Size (sqft)": s.sizeSqft || "", Seats: s.seats || "", Type: s.type || "", Status: s.status || "",
+    "Size (sqft)": s.sizeSqft || "", Seats: s.seats || "", Type: s.type || "", Status: s.status || "", "Closed date": s.closedAt || "", "Closed reason": s.closedReason || "",
     Source: s.source || "", Notes: s.notes || "",
   }));
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(data);
-  ws["!cols"] = [16, 28, 11, 11, 36, 16, 12, 16, 8, 8, 28, 10, 7, 12, 10, 10, 30].map(w => ({ wch: w }));
+  ws["!cols"] = [16, 28, 11, 11, 36, 16, 12, 16, 14, 8, 10, 24, 10, 7, 12, 10, 12, 24, 10, 30].map(w => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, ws, "Stores");
   download(wb, `stores-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }

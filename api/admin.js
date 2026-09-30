@@ -137,9 +137,10 @@ const actions = {
     out.length = 0; out.push(...clients);
     const profiles = await db().getAll(...out.map(u => db().doc(`users/${u.uid}`)).slice(0, 10000)).catch(() => []);
     const orgOf = Object.fromEntries(profiles.filter(p => p.exists).map(p => [p.id, p.data().orgId]));
+    const meOf = Object.fromEntries(profiles.filter(p => p.exists && p.data().profile).map(p => [p.id, p.data().profile]));
     return {
       users: out.map(u => ({
-        uid: u.uid, email: u.email || "", name: u.displayName || "", disabled: u.disabled, verified: u.emailVerified,
+        uid: u.uid, email: u.email || "", name: meOf[u.uid]?.name || u.displayName || "", position: meOf[u.uid]?.position || "", phone: meOf[u.uid]?.phone || "", disabled: u.disabled, verified: u.emailVerified,
         providers: u.providerData.map(p => p.providerId), created: u.metadata.creationTime, lastSignIn: u.metadata.lastSignInTime,
         orgId: orgOf[u.uid] || null, superAdmin: superAdmins().includes((u.email || "").toLowerCase()),
       })),

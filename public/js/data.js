@@ -59,6 +59,9 @@ class DemoBackend {
     if (task === "branches") { const r = await callAI({ ...base, ...branchesTask(payload.brand, payload.area) }); return { items: extractJSON(r.text), sources: r.sources }; }
   }
   async listMembers() { return [{ id: "demo", email: "demo@local", role: "owner" }]; }
+  async getMyProfile() { try { return JSON.parse(localStorage.getItem("sr-demo-me") || "{}"); } catch { return {}; } }
+  async saveMyProfile(p) { try { localStorage.setItem("sr-demo-me", JSON.stringify(p)); } catch {} }
+  async changePassword() { throw new Error("Demo mode has no password."); }
   async invite() { throw new Error("Demo mode မှာ member invite မရပါ။"); }
   async team() { throw new Error("Adding users needs the real backend (not demo mode)."); }
   async signOut() {}
@@ -195,6 +198,33 @@ class FirebaseBackend {
     return d.exists() ? d.data() : {};
   }
   saveProfile(profile) { return this.m.updateDoc(this.m.doc(this.fs, "orgs", this.org.id), { profile }); }
+
+  /* ---- My account (users/{uid} — rules: only the user can read/write their own doc) */
+  async getMyProfile() {
+    const d = await this.m.getDoc(this.m.doc(this.fs, "users", this.user.uid));
+    const p = (d.exists() && d.data().profile) || {};
+    return { name: p.name || this.auth.currentUser?.displayName || "", position: p.position || "", phone: p.phone || "" };
+  }
+  async saveMyProfile(p) {
+    const clean = { name: String(p.name || "").trim().slice(0, 80), position: String(p.position || "").trim().slice(0, 60), phone: String(p.phone || "").trim().slice(0, 30) };
+    await Promise.all([
+      this.m.setDoc(this.m.doc(this.fs, "users", this.user.uid), { profile: clean }, { merge: true }),
+      this.m.updateProfile(this.auth.currentUser, { displayName: clean.name || null }),   // shown in the admin console
+    ]);
+  }
+  /** Firebase requires a recent sign-in before a password change, so confirm the current password first. */
+  async changePassword(current, next) {
+    const u = this.auth.currentUser;
+    const cred = this.m.EmailAuthProvider.credential(u.email, current);
+    try { await this.m.reauthenticateWithCredential(u, cred); }
+    catch (e) {
+      if (["auth/wrong-password", "auth/invalid-credential", "auth/invalid-login-credentials"].includes(e.code)) throw new Error("Current password is wrong.");
+      if (e.code === "auth/too-many-requests") throw new Error("Too many attempts — wait a few minutes and try again.");
+      throw e;
+    }
+    try { await this.m.updatePassword(u, next); }
+    catch (e) { if (e.code === "auth/weak-password") throw new Error("New password is too weak — use at least 8 characters."); throw e; }
+  }
 
   col(name) { return this.m.collection(this.fs, "orgs", this.org.id, name); }
   on(name, cb) {

@@ -13,7 +13,7 @@ const toast = (msg, ms = 2600) => { const t = $("#toast"); t.textContent = msg; 
 const S = {
   api: null, brands: [], stores: [], brandsById: {}, hidden: new Set(),
   selectedId: null, radius: 1000, placing: false, editingId: null, map: null, markers: {}, circle: null, findResults: [],
-  filter: { brand: "", division: "", township: "" },
+  filter: { status: "",  brand: "", division: "", township: "" },
   measure: { on: false, pts: [], items: [], layer: null, temp: null }, popBusy: new Set(), popFailed: new Set(),
 };
 // Brand mark: logo if uploaded, else a colour dot. size in px.
@@ -156,7 +156,8 @@ let started = false;
 function startApp() {
   $("#auth").hidden = true; $("#app").hidden = false;
   $("#org-name").textContent = S.api.org.name;
-  $("#user-email").textContent = S.api.user?.email || "";
+  $("#user-email").textContent = "👤 " + (S.api.user?.email || "");
+  $("#user-email").onclick = openAccount;
   const badge = $("#mode-badge");
   badge.textContent = S.api.mode === "demo" ? "DEMO · data stays in this browser" : S.api.org.role;
   badge.classList.toggle("demo", S.api.mode === "demo");
@@ -205,13 +206,13 @@ function renderMarkers() {
   S.markers = {};
   for (const s of visibleStores()) {
     const b = S.brandsById[s.brandId] || {};
-    const cls = ["pin", b.isOwn && "own", s.status === "pending" && "pending", s.id === S.selectedId && "sel"].filter(Boolean).join(" ");
+    const cls = ["pin", b.isOwn && "own", s.status === "pending" && "pending", s.status === "closed" && "closed", s.id === S.selectedId && "sel"].filter(Boolean).join(" ");
     const useLogo = S.showLogos && b.logo, sz = useLogo ? (b.isOwn ? 40 : 32) : 20;
     const html = useLogo
       ? `<div class="${cls} logo" style="border-color:${esc(b.color || "#888")};width:${sz}px;height:${sz}px"><img src="${esc(b.logo)}" alt="" /></div>`
       : `<div class="${cls}" style="background:${esc(b.color || "#888")}"></div>`;
     const icon = L.divIcon({ className: "", html, iconSize: [sz, sz], iconAnchor: [sz / 2, sz / 2] });
-    const m = L.marker([s.lat, s.lng], { icon, zIndexOffset: b.isOwn ? 500 : 0, title: `${b.name || ""} · ${s.name}` })
+    const m = L.marker([s.lat, s.lng], { icon, zIndexOffset: s.status === "closed" ? -500 : b.isOwn ? 500 : 0, title: `${b.name || ""} · ${s.name}${s.status === "closed" ? " (closed)" : ""}` })
       .on("click", () => (S.measure.on ? measureClick(s) : selectStore(s.id))).addTo(S.map);
     S.markers[s.id] = m;
   }
@@ -234,6 +235,7 @@ const tspKey = t => String(t || "").trim().toLowerCase();
 /** Brand / division / township filter from the bar under the top bar. */
 function passes(s) {
   const f = S.filter;
+  if (f.status === "active" ? s.status === "closed" : f.status && (s.status || "verified") !== f.status) return false;
   return (!f.brand || s.brandId === f.brand) && (!f.division || divisionOf(s) === f.division) && (!f.township || tspKey(s.township) === f.township);
 }
 function visibleStores() {
@@ -243,10 +245,10 @@ function renderAll() { renderFilterBar(); renderFilter(); renderStoreList(); ren
 
 function renderFilter() {
   $("#brand-names").innerHTML = S.brands.map(b => `<option value="${esc(b.name)}">`).join("");
-  const counts = {};
-  S.stores.forEach(s => (counts[s.brandId] = (counts[s.brandId] || 0) + 1));
+  const counts = {}, closed = {};
+  S.stores.forEach(s => { const m = s.status === "closed" ? closed : counts; m[s.brandId] = (m[s.brandId] || 0) + 1; });
   $("#brand-filter").innerHTML = S.brands.map(b =>
-    `<span class="chip ${S.hidden.has(b.id) ? "off" : ""}" data-id="${b.id}">${b.logo ? mark(b, 10) : `<i style="background:${esc(b.color)}"></i>`}${esc(b.name)} <b>${counts[b.id] || 0}</b></span>`).join("");
+    `<span class="chip ${S.hidden.has(b.id) ? "off" : ""}" data-id="${b.id}">${b.logo ? mark(b, 10) : `<i style="background:${esc(b.color)}"></i>`}${esc(b.name)} <b title="active stores">${counts[b.id] || 0}</b>${closed[b.id] ? `<span class="muted small" title="closed stores"> +${closed[b.id]} closed</span>` : ""}</span>`).join("");
 }
 
 function renderStoreList() {
@@ -259,10 +261,10 @@ function renderStoreList() {
   $("#store-count").textContent = `${list.length} of ${S.stores.length} stores`;
   $("#store-list").innerHTML = list.length ? list.map(s => {
     const b = S.brandsById[s.brandId] || {};
-    return `<li data-id="${s.id}" class="${s.id === S.selectedId ? "sel" : ""}">
+    return `<li data-id="${s.id}" class="${s.id === S.selectedId ? "sel" : ""} ${s.status === "closed" ? "closed" : ""}">
       ${mark(b, 12)}
       <div class="main"><div class="t">${esc(s.name || "(no name)")}</div><div class="s">${esc(b.name || "?")} · ${s.rating ? `⭐ ${s.rating}${s.ratingCount != null ? ` (${fmtNum(s.ratingCount)})` : ""} · ` : ""}${esc([s.township, s.city].filter(Boolean).join(", ") || s.address || "")}</div></div>
-      ${s.status === "pending" ? '<span class="pill pending">pending</span>' : s.status === "closed" ? '<span class="pill closed">closed</span>' : b.isOwn ? '<span class="pill own">ours</span>' : ""}
+      ${s.status === "pending" ? '<span class="pill pending">pending</span>' : s.status === "closed" ? `<span class="pill closed" title="${esc(s.closedReason || "")}">closed${s.closedAt ? " " + esc(s.closedAt.slice(0, 7)) : ""}</span>` : b.isOwn ? '<span class="pill own">ours</span>' : ""}
     </li>`;
   }).join("") : `<li class="muted small" style="cursor:default">No stores yet — add one, import an Excel file, or use the Find tab.</li>`;
 }
@@ -297,6 +299,13 @@ function renderDetail() {
       <div class="main"><h3>${esc(s.name)}</h3><div class="muted small">${esc(b.name || "?")}${b.isOwn ? " · ours" : ""} · ${esc(s.status || "verified")}</div></div>
       <button class="btn sm ghost" id="d-close" aria-label="Close">✕</button>
     </header>
+    ${s.status === "closed" ? `<div class="closed-banner">⛔ <b>Closed</b>${s.closedAt ? ` since ${esc(s.closedAt)}` : ""}${s.closedReason ? ` — ${esc(s.closedReason)}` : ""}<br><span class="small">Not counted in competitor numbers or analysis.</span></div>` : ""}
+    ${canEdit() ? `<div class="row gap d-actions">
+      <button class="btn sm" id="d-edit">✎ Edit</button>
+      ${s.status === "pending" ? '<button class="btn sm primary" id="d-verify">✓ Mark verified</button>' : ""}
+      ${s.status === "closed" ? '<button class="btn sm" id="d-reopen">↺ Reopen</button>' : '<button class="btn sm" id="d-closed">⛔ Mark closed</button>'}
+      <button class="btn sm ghost danger-ghost" id="d-delete" title="Delete — for wrong entries. For a store that shut down use Mark closed instead.">🗑 Delete</button>
+    </div>` : ""}
     <label class="small">Radius
       <select id="d-radius">${[500, 1000, 2000, 3000, 5000].map(r => `<option value="${r}" ${r === S.radius ? "selected" : ""}>${fmtDist(r)}</option>`).join("")}</select>
     </label>
@@ -316,7 +325,6 @@ function renderDetail() {
       ${s.notes ? `<dt>Notes</dt><dd>${esc(s.notes)}</dd>` : ""}
       <dt>Location</dt><dd><a href="https://www.google.com/maps?q=${s.lat},${s.lng}" target="_blank" rel="noopener">${s.lat.toFixed(5)}, ${s.lng.toFixed(5)}</a></dd>
     </dl>
-    ${canEdit() ? `<div class="row gap"><button class="btn sm" id="d-edit">Edit</button>${s.status === "pending" ? '<button class="btn sm primary" id="d-verify">Mark verified</button>' : ""}</div>` : ""}
 
     <div><h4>Competitors in radius by brand</h4>${renderBrandBars(sum.byBrand)}</div>
 
@@ -341,6 +349,12 @@ function renderDetail() {
   $("#d-radius").onchange = e => setRadius(+e.target.value);
   $("#d-edit") && ($("#d-edit").onclick = () => openStoreDialog(s));
   $("#d-verify") && ($("#d-verify").onclick = () => S.api.update("stores", s.id, { status: "verified" }).then(() => toast("Marked verified")));
+  $("#d-closed") && ($("#d-closed").onclick = () => openStoreDialog(s, { status: "closed", closedAt: s.closedAt || new Date().toISOString().slice(0, 10) }, "closedReason"));
+  $("#d-reopen") && ($("#d-reopen").onclick = () => S.api.update("stores", s.id, { status: "verified", closedAt: "", closedReason: "" }).then(() => toast("Reopened — counted as active again")));
+  $("#d-delete") && ($("#d-delete").onclick = async () => {
+    if (!confirm(`Delete "${s.name}" permanently?\n\nUse this for wrong entries. If the store shut down, cancel and use "Mark closed" to keep its history.`)) return;
+    await S.api.remove("stores", s.id); S.selectedId = null; renderAll(); toast("Deleted");
+  });
   el.querySelectorAll(".nb").forEach(n => (n.onclick = e => {
     const go = e.target.closest("[data-go]");
     if (go) return selectStore(go.dataset.go);
@@ -503,19 +517,21 @@ function renderFind() {
 }
 
 /* =========================================================== STORE DIALOG */
-function openStoreDialog(store, preset = {}) {
+function openStoreDialog(store, preset = {}, focus) {
   const f = $("#store-form"), d = $("#store-dialog");
   if (!S.brands.length) return toast("Add a brand first (Brands & Team tab).");
   S.editingId = store?.id || null;
   f.brandId.innerHTML = S.brands.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join("");
   const v = { brandId: S.brands[0].id, status: "verified", ...store, ...preset };
   for (const el of f.elements) if (el.name && el.name in v) el.value = v[el.name] ?? "";
-  if (!store) ["name", "address", "township", "city", "sizeSqft", "seats", "notes", "mapsLink", "type", "phone", "rating", "ratingCount", "division"].forEach(k => { if (!(k in preset)) f[k].value = ""; });
+  if (!store) ["name", "address", "township", "city", "sizeSqft", "seats", "notes", "mapsLink", "type", "phone", "rating", "ratingCount", "division", "closedAt", "closedReason"].forEach(k => { if (!(k in preset)) f[k].value = ""; });
   f.mapsLink.value = "";
   $("#store-dialog-title").textContent = store ? "Edit store" : "Add store";
   $("#store-delete").hidden = !store || !canEdit();
+  $("#closed-fields").hidden = f.status.value !== "closed";
   d.returnValue = "";
   d.showModal();
+  if (focus && f[focus]) f[focus].focus();
 }
 
 /* =========================================================== BRANDS & TEAM */
@@ -586,6 +602,10 @@ function wireUI() {
 
   // Store dialog
   const f = $("#store-form");
+  f.status.onchange = () => {
+    $("#closed-fields").hidden = f.status.value !== "closed";
+    if (f.status.value === "closed" && !f.closedAt.value) f.closedAt.value = new Date().toISOString().slice(0, 10);
+  };
   f.mapsLink.oninput = () => { const c = coordsFromLink(f.mapsLink.value); if (c) { f.lat.value = c.lat; f.lng.value = c.lng; } };
   $("#store-dialog").addEventListener("close", async () => {
     if ($("#store-dialog").returnValue !== "save") return;
@@ -593,6 +613,7 @@ function wireUI() {
     delete v.mapsLink;
     const data = { ...v, lat: +v.lat, lng: +v.lng, sizeSqft: v.sizeSqft ? +v.sizeSqft : null, seats: v.seats ? +v.seats : null,
       rating: v.rating ? Math.min(5, +v.rating) : null, ratingCount: v.ratingCount !== "" && v.ratingCount != null ? +v.ratingCount : null };
+    if (data.status !== "closed") { data.closedAt = ""; data.closedReason = ""; }
     try {
       if (S.editingId) { await S.api.update("stores", S.editingId, data); toast("Saved"); }
       else { const id = await S.api.add("stores", { ...data, source: "manual" }); selectStore(id); toast("Store added"); }
@@ -601,7 +622,7 @@ function wireUI() {
   $("#store-delete").onclick = async () => {
     if (!confirm("Delete this store?")) return;
     await S.api.remove("stores", S.editingId); $("#store-dialog").close("cancel");
-    if (S.selectedId === S.editingId) S.selectedId = null; toast("Deleted");
+    if (S.selectedId === S.editingId) S.selectedId = null; renderAll(); toast("Deleted");
   };
 
   // Brands
@@ -665,6 +686,7 @@ function wireUI() {
   document.addEventListener("keydown", e => { if (e.key === "Escape") { if (S.placing) stopPlacing(); if (S.measure.on) toggleMeasure(false); $("#export-menu").hidden = true; } });
   $("#measure-btn").onclick = () => toggleMeasure(!S.measure.on);
   wireMapView();
+  wireAccount();
   $("#measure-clear").onclick = clearMeasures;
 
   // Map export (JPG / PDF)
@@ -691,10 +713,16 @@ function renderFilterBar() {
   inDiv.forEach(s => { const k = tspKey(s.township); if (!k) return; byTsp[k] = (byTsp[k] || 0) + 1; label[k] = label[k] || s.township.trim(); });
   $("#f-township").innerHTML = `<option value="">All townships</option>` + Object.keys(byTsp).sort((a, b) => label[a].localeCompare(label[b]))
     .map(k => `<option value="${esc(k)}" ${f.township === k ? "selected" : ""}>${esc(label[k])} (${byTsp[k]})</option>`).join("");
-  ["brand", "division", "township"].forEach(k => $("#f-" + k).classList.toggle("on", !!f[k]));
-  const any = f.brand || f.division || f.township;
+  // status counts follow the brand/division/township choice
+  const inPlace = inDiv.filter(s => !f.township || tspKey(s.township) === f.township);
+  const nClosed = inPlace.filter(s => s.status === "closed").length, nPend = inPlace.filter(s => s.status === "pending").length;
+  $("#f-status").innerHTML = [["", `All (${inPlace.length})`], ["active", `Active (${inPlace.length - nClosed})`], ["closed", `Closed (${nClosed})`], ["pending", `Pending check (${nPend})`]]
+    .map(([v, t]) => `<option value="${v}" ${f.status === v ? "selected" : ""}>${t}</option>`).join("");
+  ["brand", "division", "township", "status"].forEach(k => $("#f-" + k).classList.toggle("on", !!f[k]));
+  const any = f.brand || f.division || f.township || f.status;
   $("#f-clear").hidden = !any;
-  $("#f-count").textContent = any ? `Showing ${visibleStores().length} of ${S.stores.length} stores` : `${S.stores.length} stores`;
+  const shown = visibleStores(), shownClosed = shown.filter(s => s.status === "closed").length;
+  $("#f-count").innerHTML = `${any ? `Showing ${shown.length} of ${S.stores.length}` : `${S.stores.length} stores`} · <b>${shown.length - shownClosed} active</b>${shownClosed ? ` · ${shownClosed} closed` : ""}`;
   $("#division-list").innerHTML = DIVISIONS.map(d => `<option value="${d}">`).join("");
 }
 
@@ -716,7 +744,8 @@ function wireSearch() {
   $("#f-brand").onchange = e => setFilter({ brand: e.target.value });
   $("#f-division").onchange = e => setFilter({ division: e.target.value });
   $("#f-township").onchange = e => setFilter({ township: e.target.value });
-  $("#f-clear").onclick = () => setFilter({ brand: "", division: "", township: "" }, false);
+  $("#f-status").onchange = e => setFilter({ status: e.target.value }, false);
+  $("#f-clear").onclick = () => setFilter({ brand: "", division: "", township: "", status: "" }, false);
 
   const icon = t => ({ store: "📍", brand: "🏷️", township: "🏘️", division: "🗺️", city: "🏙️", place: "🌐" }[t] || "•");
   const render = () => {
@@ -771,7 +800,7 @@ function wireSearch() {
     box.hidden = true; q.blur();
     if (x.type === "store") {
       const s = S.stores.find(z => z.id === x.id); if (!s) return;
-      if (!passes(s) || S.hidden.has(s.brandId)) { S.hidden.delete(s.brandId); S.filter = { brand: "", division: "", township: "" }; renderAll(); }
+      if (!passes(s) || S.hidden.has(s.brandId)) { S.hidden.delete(s.brandId); S.filter = { brand: "", division: "", township: "", status: "" }; renderAll(); }
       selectStore(x.id);
     } else if (x.type === "brand") setFilter({ brand: x.id });
     else if (x.type === "township") setFilter({ division: x.div || "", township: x.id });
@@ -1307,4 +1336,57 @@ async function geocodeMissing(list) {
     }
     if (cache[q]) Object.assign(i, cache[q], { coord: "area", pick: false });
   }
+}
+
+/* ------------------------------------------------ My account (profile + password) */
+async function openAccount() {
+  const d = $("#account-dialog"), f = $("#acct-form"), pw = $("#pw-form"), demo = S.api.mode === "demo";
+  $("#acct-email").textContent = S.api.user?.email || "";
+  $("#acct-org").textContent = S.api.org?.name || "—";
+  $("#acct-role").textContent = S.api.org?.role || "—";
+  $("#acct-verified").innerHTML = demo ? "" : '<span class="muted small">checking…</span>';
+  $("#acct-msg").textContent = ""; $("#pw-msg").textContent = ""; pw.reset();
+  pw.hidden = demo; $("#acct-signout").hidden = demo;
+  $("#acct-business").hidden = !isAdmin() || demo;
+  f.reset();
+  d.showModal();
+  if (!demo) S.api.isVerified().then(v => ($("#acct-verified").innerHTML = v ? '<span class="pill own">verified</span>' : '<span class="pill pending">unverified</span>'));
+  try { const p = await S.api.getMyProfile(); f.name.value = p.name || ""; f.position.value = p.position || ""; f.phone.value = p.phone || ""; } catch {}
+}
+function wireAccount() {
+  $("#acct-close").onclick = () => $("#account-dialog").close();
+  $("#acct-signout").onclick = () => { S.api.forgetOrg?.(); S.api.signOut().then(() => location.reload()); };
+  $("#acct-business").onclick = async () => {
+    $("#account-dialog").close();
+    let org = {}; try { org = await S.api.loadOrgDoc(); } catch {}
+    const p = org.profile || {}, f = $("#profile-form"), d = $("#profile-dialog");
+    for (const el of f.elements) if (el.name && el.name in p) el.value = Array.isArray(p[el.name]) ? p[el.name].join(", ") : p[el.name] ?? "";
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const v = Object.fromEntries(new FormData(f));
+      const list = x => String(x || "").split(",").map(t => t.trim()).filter(Boolean).slice(0, 20);
+      const profile = { ...p, contactName: v.contactName.trim(), jobTitle: v.jobTitle.trim(), phone: v.phone.trim(), contactEmail: v.contactEmail.trim(),
+        industry: v.industry, branches: +v.branches || 0, cities: list(v.cities), website: v.website.trim(), competitors: list(v.competitors) };
+      try { await busy(e.submitter, "Saving…", () => S.api.saveProfile(profile)); d.close(); toast("Business details saved"); }
+      catch (x) { $("#profile-error").textContent = x.message; }
+    };
+    d.showModal();
+  };
+  $("#acct-form").onsubmit = async e => {
+    e.preventDefault();
+    const v = Object.fromEntries(new FormData(e.target));
+    try { await busy(e.submitter, "Saving…", () => S.api.saveMyProfile(v)); $("#acct-msg").textContent = "✓ Saved"; }
+    catch (x) { $("#acct-msg").textContent = x.message; }
+  };
+  $("#pw-form").onsubmit = async e => {
+    e.preventDefault();
+    const f = e.target, msg = $("#pw-msg");
+    msg.className = "small err";
+    if (f.next.value !== f.repeat.value) return (msg.textContent = "The two new passwords don't match.");
+    if (f.next.value === f.current.value) return (msg.textContent = "New password is the same as the current one.");
+    try {
+      await busy(e.submitter, "Changing…", () => S.api.changePassword(f.current.value, f.next.value));
+      f.reset(); msg.className = "small ok"; msg.textContent = "✓ Password changed. Use the new one next time you sign in.";
+    } catch (x) { msg.textContent = x.message; }
+  };
 }

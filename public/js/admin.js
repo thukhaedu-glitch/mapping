@@ -187,11 +187,11 @@ function renderUsers() {
   const orgName = id => A.orgs.find(o => o.id === id)?.name || "";
   const role = (uid, id) => A.orgs.find(o => o.id === id)?.members.find(m => m.uid === uid)?.role || "";
   const q = $("#user-q").value.trim().toLowerCase();
-  const list = A.users.filter(u => !q || [u.email, u.name, orgName(u.orgId)].join(" ").toLowerCase().includes(q))
+  const list = A.users.filter(u => !q || [u.email, u.name, u.phone, orgName(u.orgId)].join(" ").toLowerCase().includes(q))
     .sort((a, b) => new Date(b.created) - new Date(a.created));
   $("#users").innerHTML = `<thead><tr><th>Email</th><th>Workspace</th><th>Role</th><th>Sign-in</th><th>Created</th><th>Last sign-in</th><th>Status</th><th>Actions</th></tr></thead><tbody>` +
     list.map(u => `<tr>
-      <td>${esc(u.email)}${u.superAdmin ? ' <span class="st super">super admin</span>' : ""}${u.verified ? "" : ' <span class="pill" title="Email not verified">unverified</span>'}</td>
+      <td>${u.name ? `<b>${esc(u.name)}</b>${u.position ? ` <span class="muted small">· ${esc(u.position)}</span>` : ""}<br>` : ""}${esc(u.email)}${u.phone ? ` <span class="muted small">· ${esc(u.phone)}</span>` : ""}${u.superAdmin ? ' <span class="st super">super admin</span>' : ""}${u.verified ? "" : ' <span class="pill" title="Email not verified">unverified</span>'}</td>
       <td>${u.orgId && orgName(u.orgId) ? `<button class="link" data-open-org="${u.orgId}">${esc(orgName(u.orgId))}</button>` : '<span class="st unused">no workspace</span>'}</td>
       <td>${esc(role(u.uid, u.orgId))}</td>
       <td class="small">${u.providers.map(p => (p === "google.com" ? "Google" : p === "password" ? "Password" : p)).join(", ")}</td>
